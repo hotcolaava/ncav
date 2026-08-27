@@ -1,5 +1,0 @@
-# _config.yml
-title: 我的站点
-theme: jekyll-theme-cayman
-markdown: kramdown
-permalink: /:year/:month/:day/:title/
