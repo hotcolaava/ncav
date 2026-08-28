@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>港股烟蒂股 NCAV 筛选器</title>
+<style>
+  :root{--bg:#0f1419;--panel:#1a2129;--line:#2a3441;--txt:#d5dde5;--dim:#7a8a99;--accent:#3b82f6;--up:#22c55e;}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);font-family:"SF Mono","Cascadia Code",Consolas,"Microsoft YaHei",monospace;font-size:13px;padding:20px}
+  h1{font-size:16px;font-weight:600;color:#e6edf3;margin-bottom:4px}
+  .sub{color:var(--dim);font-size:11px;margin-bottom:14px;line-height:1.7}
+  .bar{display:flex;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-bottom:14px;flex-wrap:wrap}
+  .stat{font-size:11px;color:var(--dim)}.stat b{color:var(--txt);font-size:14px;margin-left:6px}
+  .progress{flex:1;min-width:200px;height:4px;background:#232b36;border-radius:2px;overflow:hidden}
+  .progress>i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+  button{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font:inherit;font-size:12px;cursor:pointer}
+  button:hover{filter:brightness(1.1)}button:disabled{background:#3a4656;cursor:not-allowed}
+  #tblWrap{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:auto;max-height:70vh}
+  table{border-collapse:collapse;width:100%;font-size:12px}
+  thead th{position:sticky;top:0;background:#212b36;color:#9fb0c0;font-weight:500;text-align:right;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap;z-index:1}
+  thead th:nth-child(-n+3),tbody td:nth-child(-n+3){text-align:left}
+  thead th[data-key]{cursor:pointer;user-select:none}
+  thead th[data-key]:hover{color:#d5dde5}
+  thead th.sort-asc::after{content:" ▲";font-size:9px;color:var(--accent)}
+  thead th.sort-desc::after{content:" ▼";font-size:9px;color:var(--accent)}
+  tbody td{padding:7px 10px;border-bottom:1px solid #1e2732;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+  tbody tr:nth-child(even){background:#171e26}
+  tbody tr:hover{background:#202b37}
+  .num-null{color:#4a5568}
+  .tag-low{color:var(--up)}
+  .tag-conn{color:var(--up)}
+  .log{margin-top:10px;color:var(--dim);font-size:11px;line-height:1.7;max-height:150px;overflow:auto;word-break:break-all}
+  .err{color:#ef4444}
+</style>
+</head>
+<body>
+<h1>港股烟蒂股 NCAV 筛选器（NCAV 策略）</h1>
+<div class="sub">口径：NCAV = 流动资产合计 − 负债合计 − (权益总额 − 归属母公司股东权益) · 筛选条件 NCAV &gt; 总市值 ·
+默认按 市值/NCAV 升序，点击表头可排序、再点切换升/降序 ·
+已排除牛熊证/权证/人民币柜台/ETF · 各股取最新报告期 · 数据源：东方财富公开接口 · 仅供研究</div>
+
+<div class="bar">
+  <button id="btnRefresh">刷新数据</button>
+  <span class="stat">港股正股<b id="sTotal">—</b></span>
+  <span class="stat">批量覆盖<b id="sCover">—</b></span>
+  <span class="stat">单股兜底<b id="sFill">—</b></span>
+  <span class="stat">最终入选<b id="sFinal">—</b></span>
+  <span class="stat">下次自动刷新<b id="sNext">—</b></span>
+  <div class="progress"><i id="pgBar"></i></div>
+</div>
+
+<div id="tblWrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+<div class="log" id="log"></div>
+
+<script>
+/* ================= 工具函数 ================= */
+const $=id=>document.getElementById(id);
+const log=(m,e)=>{const d=document.createElement('div');d.textContent='['+new Date().toLocaleTimeString()+'] '+m;if(e)d.className='err';$('log').appendChild(d);$('log').scrollTop=1e9;};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const memoryStorage={};
+const safeStorage={
+  getItem:k=>{try{return localStorage.getItem(k)}catch(e){return memoryStorage[k]||null}},
+  setItem:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){memoryStorage[k]=v}}
+};
+const cleanNum=v=>{
+  if(v===null||v===undefined||v==='')return 0;
+  if(typeof v==='number')return v;
+  return parseFloat(String(v).replace(/,/g,''))||0;
+};
+const yi=v=>v==null||isNaN(v)?null:(v/1e8);
+
+/* ================= push2 域名池：多节点智能轮询 ================= */
+const PUSH2_HOSTS=[
+  {host:'29.push2.eastmoney.com', label:'29实时', fails:0, cooldownUntil:0},
+  {host:'79.push2.eastmoney.com', label:'79实时', fails:0, cooldownUntil:0},
+  {host:'91.push2.eastmoney.com', label:'91实时', fails:0, cooldownUntil:0},
+  {host:'push2delay.eastmoney.com', label:'延迟镜像', fails:0, cooldownUntil:0},
+  {host:'82.push2.eastmoney.com', label:'82备用', fails:0, cooldownUntil:0},
+  {host:'17.push2.eastmoney.com', label:'17备用', fails:0, cooldownUntil:0},
+];
+function getAvailableHost(){
+  const now=Date.now();
+  for(const h of PUSH2_HOSTS){if(now<h.cooldownUntil)continue;return h;}
+  PUSH2_HOSTS.sort((a,b)=>a.cooldownUntil-b.cooldownUntil);
+  return PUSH2_HOSTS[0];
+}
+function markHost(h,success){
+  if(success){h.fails=0;h.cooldownUntil=0;}
+  else{h.fails++;if(h.fails>=3){h.cooldownUntil=Date.now()+30000;h.fails=0;log('节点 '+h.label+' 连续失败，冷却30秒');}}
+}
+
+/* ================= JSONP（绕过 file:// 的 CORS 限制） =================
+   push2 用 cb= 参数，datacenter 用 callback= 参数 */
+let _cb=0;
+function jsonpSingle(url,label,paramName){
+  return new Promise((res,rej)=>{
+    const name='__emcb_'+(++_cb)+'_'+Date.now();
+    const s=document.createElement('script');
+    const timer=setTimeout(()=>{cleanup();rej(new Error(label+'超时'))},15000);
+    function cleanup(){clearTimeout(timer);delete window[name];if(s.parentNode)s.parentNode.removeChild(s);}
+    window[name]=d=>{cleanup();res(d);};
+    s.onerror=()=>{cleanup();rej(new Error(label+'网络失败'))};
+    s.src=url+(url.includes('?')?'&':'?')+paramName+'='+name;
+    document.head.appendChild(s);
+  });
+}
+async function jsonpPush2(path){
+  const MAX_RETRY=PUSH2_HOSTS.length*3;
+  for(let i=0;i<MAX_RETRY;i++){
+    const h=getAvailableHost();
+    try{
+      const r=await jsonpSingle('https://'+h.host+path,h.label,'cb');
+      markHost(h,true);return r;
+    }catch(e){
+      markHost(h,false);
+      if(i<MAX_RETRY-1)await sleep(400);
+    }
+  }
+  throw new Error('所有push2节点均不可用，请稍后重试');
+}
+const DC_HOSTS=['https://datacenter-web.eastmoney.com/api/data/v1/get',
+                'https://datacenter.eastmoney.com/securities/api/data/v1/get'];
+let _dcIdx=0;
+async function jsonpDC(url,retries=3){
+  let lastErr=null;
+  for(let i=0;i<retries;i++){
+    for(let d=0;d<DC_HOSTS.length;d++){
+      const idx=(_dcIdx+d)%DC_HOSTS.length;
+      try{
+        const r=await jsonpSingle(DC_HOSTS[idx]+'?'+url,'DC','callback');
+        _dcIdx=idx;return r;
+      }catch(e){lastErr=e;}
+    }
+    if(i<retries-1)await sleep(1000);
+  }
+  throw lastErr||new Error('datacenter接口失败');
+}
+
+/* ================= 并发池 ================= */
+async function pool(tasks,limit,onOne){
+  const ret=[];let i=0,done=0;
+  const workers=Array(Math.min(limit,tasks.length)).fill(0).map(async()=>{
+    while(i<tasks.length){const k=i++;
+      try{ret[k]=await tasks[k]();}catch(e){ret[k]=null;}
+      done++;onOne&&onOne(done,tasks.length);}
+  });
+  await Promise.all(workers);return ret;
+}
+
+/* ================= ① 行情：全部港股正股（fs=m:116+t:3） =================
+   push2 列表接口单页硬上限 100 条（pz>100 只返回 100），
+   故 pz 固定 100，翻页终止用 total 判断 */
+const PAGE_SIZE=100;
+async function fetchSpot(onPage){
+  const mkPath=pn=>'/api/qt/clist/get?pn='+pn+'&pz='+PAGE_SIZE+'&po=1&np=1'+
+    '&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f12'+
+    '&fs='+encodeURIComponent('m:116+t:3')+
+    '&fields=f12,f13,f14,f20,f23';
+  const ext=r=>{const raw=(r&&r.data&&r.data.diff)||[];return Array.isArray(raw)?raw:Object.values(raw);};
+  const all=[];let pn=1,total=null,emptyStreak=0;
+  while(true){
+    const r=await jsonpPush2(mkPath(pn));
+    const d=r&&r.data;
+    if(!d||!ext(r).length){
+      emptyStreak++;if(emptyStreak>=2)break;
+      pn++;if(pn>60)break;await sleep(300);continue;
+    }
+    emptyStreak=0;
+    if(total==null)total=d.total||0;
+    const list=ext(r);
+    all.push(...list);
+    onPage&&onPage(all.length,total);
+    if(total>0&&all.length>=total)break;
+    if(list.length<PAGE_SIZE)break;
+    pn++;if(pn>60)break;
+    await sleep(300);
+  }
+  /* 二次过滤：无市值剔除 + 人民币柜台剔除（-R/-WR/-SWR/-DR 与港元柜台同股） */
+  const COUNTER=/-(R|WR|SWR|DR)$/;
+  const out=[];let dropMv=0,dropCtr=0;
+  for(const s of all){
+    const mv=cleanNum(s.f20);
+    if(mv<=0){dropMv++;continue;}
+    if(COUNTER.test(String(s.f14||''))){dropCtr++;continue;}
+    out.push({code:String(s.f12),name:String(s.f14||''),mv:mv,pb:cleanNum(s.f23)});
+  }
+  log('   剔除无市值 '+dropMv+' 只 / 人民币柜台 '+dropCtr+' 只');
+  return out;
+}
+
+/* ================= ② 港股通名单（沪+深 合集） ================= */
+async function fetchConnectSet(){
+  const set=new Set();
+  try{
+    let pn=1,total=null,emptyStreak=0;
+    while(pn<=15&&set.size<(total||Infinity)){
+      const path='/api/qt/clist/get?pn='+pn+'&pz='+PAGE_SIZE+'&po=1&np=1'+
+        '&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f12'+
+        '&fs='+encodeURIComponent('b:DLMK0146,b:DLMK0144')+'&fields=f12';
+      const r=await jsonpPush2(path);
+      const d=r&&r.data;
+      const raw=(d&&d.diff)||[];
+      const list=Array.isArray(raw)?raw:Object.values(raw);
+      if(!d||!list.length){
+        emptyStreak++;if(emptyStreak>=2)break;
+        pn++;await sleep(200);continue;
+      }
+      emptyStreak=0;
+      if(total==null)total=d.total||0;
+      list.forEach(s=>set.add(String(s.f12)));
+      if(total>0&&set.size>=total)break;
+      if(list.length<PAGE_SIZE)break;
+      pn++;await sleep(200);
+    }
+  }catch(e){log('港股通名单获取失败，全部标为"否"：'+e.message,true);}
+  return set;
+}
+
+/* ================= ③ F10 资产负债表：批量模式（报告期×4科目，500行/页） ================= */
+const REQUIRED_ITEMS=['流动资产合计','总负债','总权益','股东权益'];
+async function fetchF10Batch(reportDate){
+  const out=[];let page=1;
+  const filter='(STD_ITEM_NAME in ('+REQUIRED_ITEMS.map(x=>'"'+x+'"').join(',')+'))(REPORT_DATE=\''+reportDate+'\')';
+  const q='reportName=RPT_HKF10_FN_BALANCE_PC&columns=ALL'+
+    '&filter='+encodeURIComponent(filter)+
+    '&sortColumns=SECUCODE,STD_ITEM_CODE&sortTypes=1,1&pageSize=500&pageNumber=';
+  while(true){
+    const r=await jsonpDC(q+page+'&source=F10&client=PC&_='+Date.now());
+    const d=r&&r.result&&r.result.data;
+    if(!d||!d.length)break;
+    out.push(...d);
+    const cnt=(r.result&&r.result.count)||0;
+    if(out.length>=cnt)break;
+    page++;if(page>40)break;
+    await sleep(200);
+  }
+  return out;
+}
+
+/* ================= ④ F10 单股：最新一期全科目（兜底） ================= */
+async function fetchBalanceFull(secuCode){
+  const q='reportName=RPT_HKF10_FN_BALANCE_PC&columns=ALL'+
+    '&filter='+encodeURIComponent('(SECUCODE="'+secuCode+'")')+
+    '&sortColumns=STD_REPORT_DATE,STD_ITEM_CODE&sortTypes=-1,1&pageSize=300&pageNumber=1'+
+    '&source=F10&client=PC&_='+Date.now();
+  const r=await jsonpDC(q);
+  const d=r&&r.result&&r.result.data;
+  if(!d||!d.length)return null;
+  let maxD='';
+  d.forEach(x=>{const rd=String(x.REPORT_DATE||'');if(rd>maxD)maxD=rd;});
+  const items={};
+  d.forEach(x=>{
+    if(String(x.REPORT_DATE||'')!==maxD)return;
+    const n=x.STD_ITEM_NAME,v=cleanNum(x.AMOUNT);
+    if(n&&items[n]===undefined)items[n]=v;
+  });
+  return {reportDate:maxD.slice(0,10),items:items};
+}
+
+/* 最近N个报告期（倒序） */
+function recentReportDates(n){
+  const arr=[];const now=new Date();const y=now.getFullYear();
+  const qs=[[y,12,31],[y,9,30],[y,6,30],[y,3,31],[y-1,12,31],[y-1,9,30],[y-1,6,30],[y-1,3,31]];
+  for(const[yy,mm,dd]of qs){
+    const dt=new Date(yy,mm-1,dd);
+    if(dt<now){arr.push(yy+'-'+String(mm).padStart(2,'0')+'-'+String(dd).padStart(2,'0'));if(arr.length>=n)break;}
+  }
+  return arr;
+}
+
+/* ================= NCAV 统一计算（港股口径） ================= */
+function calcRow(code,name,mv,items,rd){
+  const ca=items['流动资产合计'];
+  const liab=items['总负债']||items['负债合计'];
+  if(ca==null||liab==null||ca<=0||liab<0)return null;
+  const te=items['总权益'];
+  const pc=items['股东权益'];
+  let mi=0;
+  if(te!=null&&pc!=null)mi=te-pc;           // 权益总额-归母
+  else mi=items['少数股东权益']||0;
+  if(mi<0)mi=0;
+  const ncav=ca-liab-mi;
+  if(!(ncav>mv))return null;
+  const ib=(items['短期贷款']||items['短期借款']||0)
+    +(items['一年内到期的非流动负债']||0)
+    +(items['长期贷款']||items['长期借款']||0)
+    +(items['应付短期债券']||items['应付债券']||0);
+  const ta=items['资产总计']||items['总资产'];
+  return {code:code,name:name,rd:rd,
+    ca:yi(ca),liab:yi(liab),ncav:yi(ncav),ib:yi(ib),mi:yi(mi),
+    dr:(ta&&ta>0)?(liab/ta*100):null,mv:yi(mv),ratioNcav:mv/ncav};
+}
+
+/* ================= 表格排序 =================
+   点击表头：首次升序，再点降序，换列重置升序；
+   null 值恒排末尾；纯前端重排，不发新请求。 */
+const sortState={key:'ratioNcav',dir:1};   // 默认：市值/NCAV 升序（策略口径）
+let _rows=[];                              // 当前数据集
+
+function sortRows(rows){
+  const k=sortState.key,dir=sortState.dir;
+  return rows.slice().sort((a,b)=>{
+    const va=a[k],vb=b[k];
+    const an=(va===null||va===undefined||va==='');
+    const bn=(vb===null||vb===undefined||vb==='');
+    if(an&&bn)return 0;
+    if(an)return 1;                         // null 恒排末尾
+    if(bn)return -1;
+    if(k==='conn')return va===vb?0:(va?-dir:dir);  // 布尔：升序"是"在前
+    if(typeof va==='string'||typeof vb==='string')
+      return dir*String(va).localeCompare(String(vb),'zh');
+    return dir*(va-vb);
+  });
+}
+
+/* ================= 渲染 ================= */
+const COLS=[
+  ['代码','code'],['名称','name'],['报告期','rd'],
+  ['流动资产总值(亿)','ca'],['所有负债(亿)','liab'],['NCAV(亿)','ncav'],
+  ['有息负债(亿)','ib'],['少数股东权益(亿)','mi'],['资产负债率(%)','dr'],
+  ['市值(亿)','mv'],['市值/NCAV','ratioNcav'],['港股通','conn']
+];
+function render(){
+  $('thead').innerHTML='<tr>'+COLS.map(c=>{
+    const k=c[1];
+    const cls=k===sortState.key?(sortState.dir===1?' class="sort-asc"':' class="sort-desc"'):'';
+    return '<th data-key="'+k+'"'+cls+'>'+c[0]+'</th>';
+  }).join('')+'</tr>';
+  const rows=sortRows(_rows);
+  $('tbody').innerHTML=rows.length?rows.map(r=>'<tr>'+
+    COLS.map(c=>{
+      const k=c[1];
+      if(k==='conn')return '<td class="'+(r.conn?'tag-conn':'num-null')+'">'+(r.conn?'是':'否')+'</td>';
+      const v=r[k];
+      let s=v==null?'<span class="num-null">—</span>':(typeof v==='number'?v.toFixed(2):v);
+      if(k==='ratioNcav'&&v!=null)s='<span class="tag-low">'+v.toFixed(3)+'</span>';
+      return '<td>'+s+'</td>';}).join('')+'</tr>').join('')
+    :'<tr><td colspan="12" style="text-align:center;color:#4a5568;padding:24px">暂无数据，点击"刷新数据"</td></tr>';
+}
+
+/* 表头点击：事件委托绑在持久的 #thead 上，重建 th 不丢监听 */
+$('thead').addEventListener('click',e=>{
+  const th=e.target.closest('th[data-key]');
+  if(!th)return;
+  const k=th.dataset.key;
+  if(sortState.key===k){
+    sortState.dir*=-1;                     // 同列：升↔降切换
+  }else{
+    sortState.key=k;sortState.dir=1;       // 换列：重置升序
+  }
+  render();
+  log('排序：'+th.textContent.trim()+(sortState.dir===1?' 升序 ▲':' 降序 ▼'));
+});
+
+/* ================= 主流程 ================= */
+async function run(){
+  $('btnRefresh').disabled=true;$('tbody').innerHTML='';setProg(0);
+  log('开始刷新…');
+  try{
+    /* ① 行情 */
+    log('① 拉取全部港股正股（fs=m:116+t:3，pz=100 分页）…');
+    const spot=await fetchSpot((n,t)=>setProg(Math.min(8,n/(t||2604)*8)));
+    if(spot.length<1000)throw new Error('正股仅获取 '+spot.length+' 只（预期约2500），接口异常');
+    $('sTotal').textContent=spot.length;
+    log('   港股正股共 '+spot.length+' 只（已排除牛熊证/权证）');
+    setProg(10);
+
+    /* ② 港股通名单 */
+    log('② 拉取港股通名单（沪+深 合集）…');
+    const connSet=await fetchConnectSet();
+    log('   港股通标的 '+connSet.size+' 只');
+    setProg(15);
+
+    /* ③ F10 批量：最近3个报告期 × 4科目 */
+    const dates=recentReportDates(3);
+    log('③ 批量拉取 F10 资产负债表，报告期: '+dates.join(' / '));
+    const balMap={};
+    for(let di=0;di<dates.length;di++){
+      const rows=await fetchF10Batch(dates[di]);
+      log('   '+dates[di]+' 批量返回 '+rows.length+' 行');
+      const byCode={};
+      rows.forEach(r=>{
+        const c=r.SECURITY_CODE;if(!c)return;
+        const rd=String(r.REPORT_DATE||'').slice(0,10);
+        if(!byCode[c]||rd>byCode[c].rd)byCode[c]={rd:rd,items:{}};
+        if(r.STD_ITEM_NAME)byCode[c].items[r.STD_ITEM_NAME]=cleanNum(r.AMOUNT);
+      });
+      Object.keys(byCode).forEach(c=>{
+        const cur=byCode[c];
+        if(!balMap[c]||cur.rd>balMap[c].rd)balMap[c]=cur;
+      });
+      setProg(15+50*(di+1)/dates.length);
+    }
+    log('   批量覆盖 '+Object.keys(balMap).length+' 只');
+    $('sCover').textContent=Object.keys(balMap).length;
+    setProg(65);
+
+    /* ④ 单股兜底 */
+    const missing=spot.filter(s=>!balMap[s.code]);
+    let filled=0;
+    if(missing.length>0){
+      log('④ 发现 '+missing.length+' 只正股批量数据缺失，启动单股兜底…');
+      const tasks=missing.map(s=>async()=>{
+        try{
+          const full=await fetchBalanceFull(s.code+'.HK');
+          if(full&&full.items['流动资产合计']!=null){
+            balMap[s.code]=full;return 1;
+          }
+        }catch(e){}
+        return 0;
+      });
+      const rs=await pool(tasks,8,(d,t)=>setProg(65+15*d/t));
+      filled=rs.filter(x=>x===1).length;
+      log('   单股兜底补齐 '+filled+' 只，仍缺失 '+(missing.length-filled)+' 只（多为停牌/退市/无财报）');
+    }
+    $('sFill').textContent=filled;
+    setProg(80);
+
+    /* ⑤ 计算NCAV */
+    const result=[];
+    spot.forEach(s=>{
+      const b=balMap[s.code];if(!b)return;
+      const row=calcRow(s.code,s.name,s.mv,b.items,b.rd);
+      if(row){
+        row.conn=connSet.has(s.code);
+        result.push(row);
+      }
+    });
+
+    _rows=result;
+    $('sFinal').textContent=result.length;
+    render();
+    log('完成，入选 '+result.length+' 只。点击表头可排序。');
+    safeStorage.setItem('hk_ncav_cache',JSON.stringify({ts:Date.now(),data:result}));
+  }catch(e){
+    log('刷新失败: '+e.message,true);
+    log('若反复失败，请将本文件放到本地静态服务器打开（如 python -m http.server 8000）',true);
+  }
+  $('btnRefresh').disabled=false;setProg(100);scheduleNext();
+}
+function setProg(p){$('pgBar').style.width=Math.min(100,p)+'%';}
+
+/* ================= 每天 18:00 定时 ================= */
+let _timer=null;
+function scheduleNext(){
+  clearTimeout(_timer);
+  const now=new Date(),t=new Date(now);
+  t.setHours(18,0,0,0);
+  if(t<=now)t.setDate(t.getDate()+1);
+  $('sNext').textContent=t.toLocaleString('zh-CN');
+  _timer=setTimeout(run,t-now);
+}
+setInterval(()=>{if(!document.hidden){
+  const n=new Date(),t=new Date();t.setHours(18,0,0,0);
+  if(Math.abs(t-n)<60000&&!$('btnRefresh').disabled){log('18:00 触发自动刷新');run();}
+}},60000);
+
+/* ================= 启动 ================= */
+$('btnRefresh').onclick=run;
+(function init(){
+  const c=safeStorage.getItem('hk_ncav_cache');
+  if(c){try{
+    const o=JSON.parse(c);
+    _rows=o.data||[];
+    render();
+    log('已加载 '+new Date(o.ts).toLocaleString()+' 的缓存（'+_rows.length+' 只），点击刷新获取最新');
+  }catch(e){}}
+  scheduleNext();
+  if(!_rows.length)run();
+})();
+</script>
+</body>
+</html>
