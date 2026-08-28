@@ -96,7 +96,7 @@ function markHost(h,success){
     if(h.fails>=2){
       h.cooldownUntil=Date.now()+30000; // 冷却30秒
       h.fails=0;
-      log('节点 '+h.label+' 连续失败，冷却30秒',true);
+      log('节点 '+h.label+' 连续失败，冷却30秒');
     }
   }
 }
