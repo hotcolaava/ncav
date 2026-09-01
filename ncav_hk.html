@@ -36,7 +36,7 @@
 </head>
 <body>
 <h1>港股烟蒂股 NCAV 筛选器（NCAV 策略）</h1>
-<div class="sub">口径：NCAV = 流动资产合计 − 负债合计 − 少数股东权益 · 筛选条件 NCAV &gt; 总市值 ·
+<div class="sub">口径：NCAV = 流动资产合计 − 负债合计 − 少数股东权益 − 其他权益工具 · 筛选条件 NCAV &gt; 总市值 ·
 <b>排序：点击主排序 / Shift+点击追加次级排序 / Ctrl+点击移除</b> ·
 资产负债率 = 总负债 / 总资产（总资产缺失时以流动+非流动资产合计兜底） ·
 有息负债 = 短期贷款 + 一年内到期非流动负债 + 长期贷款 + 应付债券 + 租赁负债 ·
@@ -74,7 +74,7 @@ const cleanNum=v=>{
   return parseFloat(String(v).replace(/,/g,''))||0;
 };
 const yi=v=>v==null||isNaN(v)?null:(v/1e8);
-/* 从 items 中取第一个存在的科目值（区分“不存在”与“值为0”） */
+/* 从 items 中取第一个存在的科目值（区分"不存在"与"值为0"） */
 const pick=(o,...ks)=>{for(const k of ks){if(o[k]!==undefined&&o[k]!==null)return o[k];}return undefined;};
 
 /* ==========================================================
@@ -232,14 +232,13 @@ async function fetchConnectSet(){
 
 /* ==========================================================
    ③④ F10 资产负债表
-   【修复】REQUIRED_ITEMS 补齐计算所需的全部科目：
-   - 资产负债率需要：资产总计 / 总资产（缺失时以流动+非流动资产合计兜底）
-   - 有息负债需要：短期贷款/长期贷款/应付债券/租赁负债等
-   原代码只请求 4 个 NCAV 核心科目，导致这两列数据缺失。
+   【改动】REQUIRED_ITEMS 新增"其他权益工具"及常见同义命名（永久资本证券、优先股等）
    ========================================================== */
 const REQUIRED_ITEMS=[
   /* --- NCAV 核心科目 --- */
   '流动资产合计','总负债','负债合计','总权益','股东权益',
+  /* --- 其他权益工具（NCAV 扣减项，含常见命名兼容） --- */
+  '其他权益工具','永久资本证券','优先股',
   /* --- 资产负债率相关 --- */
   '资产总计','总资产','非流动资产合计',
   /* --- 有息负债科目（多命名兼容） --- */
@@ -262,7 +261,6 @@ async function fetchF10Batch(reportDate){
     out.push(...d);
     const cnt=(r.result&&r.result.count)||0;
     if(out.length>=cnt)break;
-    /* 科目数增多，返回行数增加，翻页上限调至 120 防止截断 */
     page++;if(page>120)break;
     await sleep(200);
   }
@@ -298,9 +296,8 @@ function recentReportDates(n){
 
 /* ==========================================================
    NCAV / 资产负债率 / 有息负债 计算
-   - 资产负债率：总资产优先取“资产总计/总资产”，缺失时用
-     流动资产合计 + 非流动资产合计 兜底
-   - 有息负债：任一科目存在则求和；全部缺失则返回 null（显示 —）
+   【改动】NCAV 在原基础上额外扣减"其他权益工具"（含永续债、
+   永久资本证券、优先股等同义科目），公司无该科目时视为 0
    ========================================================== */
 function calcRow(code,name,mv,items,rd){
   const ca=pick(items,'流动资产合计');
@@ -311,7 +308,9 @@ function calcRow(code,name,mv,items,rd){
   if(te!=null&&pc!=null)mi=te-pc;
   else mi=items['少数股东权益']||0;
   if(mi<0)mi=0;
-  const ncav=ca-liab-mi;
+  /* 新增：其他权益工具扣减（无该科目视为 0） */
+  const oei=pick(items,'其他权益工具','永久资本证券','优先股')||0;
+  const ncav=ca-liab-mi-oei;
   if(!(ncav>mv))return null;
 
   /* 有息负债 = 短期借款类 + 一年内到期 + 长期借款类 + 债券 + 租赁负债 */
@@ -333,16 +332,12 @@ function calcRow(code,name,mv,items,rd){
   const dr=(ta!=null&&ta>0)?(liab/ta*100):null;
 
   return {code:code,name:name,rd:rd,
-    ca:yi(ca),liab:yi(liab),ncav:yi(ncav),ib:yi(ibVal),mi:yi(mi),
+    ca:yi(ca),liab:yi(liab),ncav:yi(ncav),ib:yi(ibVal),mi:yi(mi),oei:yi(oei),
     dr:dr,mv:yi(mv),ratioNcav:mv/ncav};
 }
 
 /* ==========================================================
    多列复合排序
-   状态：sortSpecs = [{key, dir}...]，数组顺序即排序优先级
-   交互：单击 = 设主排序（已是主排序则切换方向）
-        Shift+点击 = 追加次级排序（已存在则切换方向）
-        Ctrl/Cmd+点击 = 移除该列排序
    ========================================================== */
 let sortSpecs=[{key:'ratioNcav',dir:1}];
 let _rows=[];
@@ -368,10 +363,12 @@ function sortRows(rows){
 
 /* ==========================================================
    渲染
+   【改动】新增"其他权益工具(亿)"列
    ========================================================== */
 const COLS=[
   ['代码','code'],['名称','name'],['报告期','rd'],
   ['流动资产总值(亿)','ca'],['所有负债(亿)','liab'],['NCAV(亿)','ncav'],
+  ['其他权益工具(亿)','oei'],
   ['有息负债(亿)','ib'],['少数股东权益(亿)','mi'],['资产负债率(%)','dr'],
   ['市值(亿)','mv'],['市值/NCAV','ratioNcav'],['港股通','conn']
 ];
@@ -396,7 +393,7 @@ function render(){
       let s=v==null?'<span class="num-null">—</span>':(typeof v==='number'?v.toFixed(2):v);
       if(k==='ratioNcav'&&v!=null)s='<span class="tag-low">'+v.toFixed(3)+'</span>';
       return '<td>'+s+'</td>';}).join('')+'</tr>').join('')
-    :'<tr><td colspan="12" style="text-align:center;color:#4a5568;padding:24px">暂无数据，点击"刷新数据"</td></tr>';
+    :'<tr><td colspan="13" style="text-align:center;color:#4a5568;padding:24px">暂无数据，点击"刷新数据"</td></tr>';
 }
 
 $('thead').addEventListener('click',e=>{
@@ -405,17 +402,14 @@ $('thead').addEventListener('click',e=>{
   const k=th.dataset.key;
 
   if(e.ctrlKey||e.metaKey){
-    /* Ctrl/Cmd+点击：移除 */
     const idx=sortSpecs.findIndex(s=>s.key===k);
     if(idx>=0)sortSpecs.splice(idx,1);
     else sortSpecs.push({key:k,dir:1});
   }else if(e.shiftKey){
-    /* Shift+点击：追加/切换 */
     const idx=sortSpecs.findIndex(s=>s.key===k);
     if(idx>=0)sortSpecs[idx].dir*=-1;
     else sortSpecs.push({key:k,dir:1});
   }else{
-    /* 单击：主排序 */
     const existing=sortSpecs.find(s=>s.key===k);
     if(sortSpecs.length===1&&existing){
       existing.dir*=-1;
@@ -497,7 +491,6 @@ async function run(){
     _rows=result;
     $('sFinal').textContent=result.length;
     render();
-    /* 覆盖率统计 */
     const drOk=result.filter(r=>r.dr!=null).length;
     const ibOk=result.filter(r=>r.ib!=null).length;
     const ibZero=result.filter(r=>r.ib===0).length;
@@ -533,9 +526,11 @@ $('btnRefresh').onclick=run;
   if(c){try{
     const o=JSON.parse(c);
     _rows=o.data||[];
+    /* 旧缓存缺少 oei 字段时补 0，避免表格显示异常 */
+    _rows.forEach(r=>{if(r.oei==null)r.oei=0;});
     render();
     log('已加载 '+new Date(o.ts).toLocaleString('zh-CN')+' 的缓存（'+_rows.length+' 只）');
-    log('提示：旧缓存中资产负债率/有息负债可能缺失或为 0，请点击"刷新数据"重新拉取。');
+    log('提示：旧缓存基于旧口径计算（未扣减其他权益工具），请点击"刷新数据"以新口径重新筛选。');
   }catch(e){}}
   scheduleNext();
   if(!_rows.length)run();
@@ -543,3 +538,4 @@ $('btnRefresh').onclick=run;
 </script>
 </body>
 </html>
+

@@ -35,7 +35,7 @@
 </head>
 <body>
 <h1>A/B股烟蒂股 NCAV 筛选器</h1>
-<div class="sub">口径：NCAV = 流动资产合计 − 负债合计 − 少数股东权益；筛选条件 NCAV &gt; 总市值；按 市值/NCAV 升序 · 覆盖沪深A股+沪深B股（B股市值已按实时汇率换算人民币）· 已排除退市/停牌股 · 仅供研究</div>
+<div class="sub">口径：NCAV = 流动资产合计 − 负债合计 − 少数股东权益 − 其他权益工具（含永续债/优先股，类债属性）；筛选条件 NCAV &gt; 总市值；按 市值/NCAV 升序 · 覆盖沪深A股+沪深B股（B股市值已按实时汇率换算人民币）· 已排除退市/停牌股 · 仅供研究</div>
 
 <!-- 汇率显示面板 -->
 <div class="rate-box" id="rateBox">
@@ -337,7 +337,9 @@ function calcRow(code,name,mv,f,rd,isB,currency){
   const ca=cleanNum(f.TOTAL_CURRENT_ASSETS);
   const liab=cleanNum(f.TOTAL_LIABILITIES);
   const mi=cleanNum(f.MINORITY_EQUITY);
-  const ncav=ca-liab-mi;
+  /* 新增：其他权益工具（永续债/优先股，类债属性，从NCAV中扣除）*/
+  const oei=cleanNum(f.OTHER_EQUITY_TOOL||f.OTHER_EQUITY_INSTRUMENT||0);
+  const ncav=ca-liab-mi-oei;
   if(!(ncav>mv))return null;
   const ib=cleanNum(f.SHORT_LOAN)
     +cleanNum(f.NONCURRENT_LIAB_1YEAR||f.NON_CURRENT_LIAB_1YEAR||f.LIAB_1YEAR||0)
@@ -349,7 +351,7 @@ function calcRow(code,name,mv,f,rd,isB,currency){
   }
   return {code:code,name:name,rd:rd,
     market:marketLabel,
-    ca:yi(ca),liab:yi(liab),ncav:yi(ncav),ib:yi(ib),mi:yi(mi),
+    ca:yi(ca),liab:yi(liab),ncav:yi(ncav),ib:yi(ib),mi:yi(mi),oei:yi(oei),
     ratio:ta>0?(liab/ta*100):null,mv:yi(mv),ratioNcav:mv/ncav};
 }
 
@@ -462,6 +464,7 @@ async function run(){
 
     const pab=balMap['000001'];
     if(pab)log('单位自检: 平安银行总资产原始值 = '+pab.row.TOTAL_ASSETS+'（正常应约5e12量级）');
+    if(pab)log('字段自检: 平安银行其他权益工具 = '+pab.row.OTHER_EQUITY_TOOL+'（无永续债/优先股则为0或null）');
 
     result.sort((a,b)=>a.ratioNcav-b.ratioNcav);
     $('sFinal').textContent=result.length;
@@ -478,7 +481,7 @@ function setProg(p){$('pgBar').style.width=Math.min(100,p)+'%';}
 /* ================= 渲染 ================= */
 function render(rows){
   const cols=[['代码','code'],['市场','market'],['名称','name'],['报告期','rd'],['流动资产合计(亿)','ca'],['负债合计(亿)','liab'],
-    ['NCAV(亿)','ncav'],['有息负债(亿)','ib'],['少数股东权益(亿)','mi'],['资产负债率(%)','ratio'],
+    ['NCAV(亿)','ncav'],['有息负债(亿)','ib'],['少数股东权益(亿)','mi'],['其他权益工具(亿)','oei'],['资产负债率(%)','ratio'],
     ['总市值(亿,CNY)','mv'],['市值/NCAV','ratioNcav']];
   $('thead').innerHTML='<tr>'+cols.map(c=>'<th>'+c[0]+'</th>').join('')+'</tr>';
   $('tbody').innerHTML=rows.length?rows.map(r=>'<tr>'+
@@ -490,7 +493,7 @@ function render(rows){
       if(c[1]==='ratioNcav'&&v!=null)s='<span class="tag-low">'+v.toFixed(3)+'</span>';
       if(c[1]==='market'&&v&&v.startsWith('B股'))s='<span class="tag-b">'+v+'</span>';
       return '<td>'+s+'</td>';}).join('')+'</tr>').join('')
-    :'<tr><td colspan="12" style="text-align:center;color:#4a5568;padding:24px">当前无满足 NCAV &gt; 市值 的股票</td></tr>';
+    :'<tr><td colspan="13" style="text-align:center;color:#4a5568;padding:24px">当前无满足 NCAV &gt; 市值 的股票</td></tr>';
 }
 
 /* ================= 定时 ================= */
@@ -504,10 +507,12 @@ function scheduleNext(){
   _timer=setTimeout(run,t-now);
   log('已调度下次自动刷新: '+t.toLocaleString('zh-CN'));
 }
-setInterval(()=>{if(!document.hidden){
-  const n=new Date(),t=new Date();t.setHours(18,0,0,0);
-  if(Math.abs(t-n)<60000&&!$('btnRefresh').disabled){log('18:00 触发自动刷新');run();}
-}},60000);
+setInterval(()=>{
+  if(!document.hidden){
+    const n=new Date(),t=new Date();t.setHours(18,0,0,0);
+    if(Math.abs(t-n)<60000&&!$('btnRefresh').disabled){log('18:00 触发自动刷新');run();}
+  }
+},60000);
 
 /* ================= 启动 ================= */
 $('btnRefresh').onclick=run;
@@ -522,7 +527,7 @@ $('btnRefresh').onclick=run;
         $('rateHkd').textContent=o.rates.hk.toFixed(4)+'(缓存)';
         $('rateTime').textContent='缓存于 '+new Date(o.ts).toLocaleTimeString('zh-CN');
       }
-      log('已加载 '+new Date(o.ts).toLocaleString()+' 的缓存，点击刷新获取最新');
+      log('已加载 '+new Date(o.ts).toLocaleString('zh-CN')+' 的缓存，点击刷新获取最新');
     }catch(e){}
   }
   scheduleNext();
