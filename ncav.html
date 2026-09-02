@@ -343,7 +343,8 @@ function calcRow(code,name,mv,f,rd,isB,currency){
   if(!(ncav>mv))return null;
   const ib=cleanNum(f.SHORT_LOAN)
     +cleanNum(f.NONCURRENT_LIAB_1YEAR||f.NON_CURRENT_LIAB_1YEAR||f.LIAB_1YEAR||0)
-    +cleanNum(f.LONG_LOAN)+cleanNum(f.BOND_PAYABLE);
+    +cleanNum(f.LONG_LOAN)+cleanNum(f.BOND_PAYABLE)
+    +cleanNum(f.LEASE_LIABILITY||f.LEASE_LIAB||f.RENT_LEASE||0);
   const ta=cleanNum(f.TOTAL_ASSETS);
   let marketLabel='A股';
   if(isB){
@@ -465,6 +466,7 @@ async function run(){
     const pab=balMap['000001'];
     if(pab)log('单位自检: 平安银行总资产原始值 = '+pab.row.TOTAL_ASSETS+'（正常应约5e12量级）');
     if(pab)log('字段自检: 平安银行其他权益工具 = '+pab.row.OTHER_EQUITY_TOOL+'（无永续债/优先股则为0或null）');
+    if(pab)log('字段自检: 平安银行租赁负债 = '+pab.row.LEASE_LIABILITY+'（无租赁负债则为0或null）');
 
     result.sort((a,b)=>a.ratioNcav-b.ratioNcav);
     $('sFinal').textContent=result.length;
