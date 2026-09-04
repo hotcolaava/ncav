@@ -2,13 +2,13 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>A/B股烟蒂股 NCAV 筛选器</title>
+<title>A/B股烟蒂股 NCAV 筛选器（含调整后NCAV）</title>
 <style>
   :root{--bg:#0f1419;--panel:#1a2129;--line:#2a3441;--txt:#d5dde5;--dim:#7a8a99;--accent:#3b82f6;--up:#22c55e;}
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--txt);font-family:"SF Mono","Cascadia Code",Consolas,"Microsoft YaHei",monospace;font-size:13px;padding:20px}
   h1{font-size:16px;font-weight:600;color:#e6edf3;margin-bottom:4px}
-  .sub{color:var(--dim);font-size:11px;margin-bottom:14px}
+  .sub{color:var(--dim);font-size:11px;margin-bottom:14px;line-height:1.6}
   .bar{display:flex;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-bottom:14px;flex-wrap:wrap}
   .stat{font-size:11px;color:var(--dim)}.stat b{color:var(--txt);font-size:14px;margin-left:6px}
   .rate-box{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 16px;margin-bottom:14px;font-size:11px;color:var(--dim);flex-wrap:wrap}
@@ -34,8 +34,13 @@
 </style>
 </head>
 <body>
-<h1>A/B股烟蒂股 NCAV 筛选器</h1>
-<div class="sub">口径：NCAV = 流动资产合计 − 负债合计 − 少数股东权益 − 其他权益工具（含永续债/优先股，类债属性）；筛选条件 NCAV &gt; 总市值；按 市值/NCAV 升序 · 覆盖沪深A股+沪深B股（B股市值已按实时汇率换算人民币）· 已排除退市/停牌股 · 仅供研究</div>
+<h1>A/B股烟蒂股 NCAV 筛选器（含调整后NCAV）</h1>
+<div class="sub">
+  口径：<br>
+  ① NCAV = 流动资产合计 − 负债合计 − 少数股东权益 − 其他权益工具（含永续债/优先股）<br>
+  ② 调整后NCAV = 现金类(货币资金+交易性金融资产)×100% + 应收类(应收账款+应收票据+其他应收款+应收款项融资)×80% + 存货×60% + 其他流动资产×50% + 固定资产类(固定资产+在建工程+投资性房地产)×15% − 负债合计(全额) − 少数股东权益 − 其他权益工具<br>
+  筛选条件：NCAV &gt; 总市值；按 市值/NCAV 升序 · 覆盖沪深A股+沪深B股（B股市值已按实时汇率换算人民币）· 已排除退市/停牌股 · 仅供研究
+</div>
 
 <!-- 汇率显示面板 -->
 <div class="rate-box" id="rateBox">
@@ -189,54 +194,30 @@ const codeOf=(code,mkt)=>{
   return code+'.SZ';
 };
 
-/* ================= 汇率获取（修正版：使用正确的外汇列表接口） ================= */
+/* ================= 汇率获取（使用外汇列表接口） ================= */
 async function fetchExchangeRate(){
   let usRate=0;let hkRate=0;let isDefault=false;
-  
-  /* 默认值（仅在完全无法获取实时汇率时使用） */
   let defaultUs=7.20;let defaultHk=0.92;
-  
   try{
-    /* 使用正确的外汇列表接口获取实时汇率 */
-    /* fs=m:119,m:120,m:133 覆盖所有外汇市场分类 */
     const forexPath='/api/qt/clist/get?pn=1&pz=200&po=1&np=1'+
       '&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f12'+
       '&fs=m:119,m:120,m:133'+
       '&fields=f2,f12,f14';
-    
     const r=await jsonpPush2(forexPath);
     const list=(r&&r.data&&r.data.diff)||[];
-    
-    if(!Array.isArray(list)&&typeof list==='object'){
-      /* 兼容对象格式 */
-      list=Object.values(list);
-    }
-    
-    /* 在返回的外汇列表中查找 USDCNH 和 HKDCNH */
-    for(const item of list){
+    const arr=Array.isArray(list)?list:Object.values(list);
+    for(const item of arr){
       const code=item.f12;
       const price=cleanNum(item.f2);
-      
-      if(code==='USDCNH'&&price>5&&price<10){
-        usRate=price;
-      }
-      if(code==='HKDCNH'&&price>0.5&&price<1.5){
-        hkRate=price;
-      }
-      /* 也查找在岸汇率作为备选 */
-      if(code==='USDCNYC'&&usRate===0&&price>5&&price<10){
-        usRate=price;
-      }
-      if(code==='HKDCNYC'&&hkRate===0&&price>0.5&&price<1.5){
-        hkRate=price;
-      }
+      if(code==='USDCNH'&&price>5&&price<10){usRate=price;}
+      if(code==='HKDCNH'&&price>0.5&&price<1.5){hkRate=price;}
+      if(code==='USDCNYC'&&usRate===0&&price>5&&price<10){usRate=price;}
+      if(code==='HKDCNYC'&&hkRate===0&&price>0.5&&price<1.5){hkRate=price;}
     }
-    
     if(usRate>0&&hkRate>0){
       log('实时汇率获取成功: USD/CNY='+usRate.toFixed(4)+', HKD/CNY='+hkRate.toFixed(4));
     }else{
-      log('部分汇率未找到，USDCNH='+usRate+', HKDCNH='+hkRate+'，外汇列表共'+list.length+'条',true);
-      /* 如果只获取到部分，使用默认值补充 */
+      log('部分汇率未找到，使用默认值补充',true);
       if(usRate===0)usRate=defaultUs;
       if(hkRate===0)hkRate=defaultHk;
       isDefault=true;
@@ -245,12 +226,9 @@ async function fetchExchangeRate(){
     log('实时汇率获取失败('+e.message+')，使用默认值: USD='+defaultUs+', HKD='+defaultHk,true);
     usRate=defaultUs;hkRate=defaultHk;isDefault=true;
   }
-  
-  /* 更新页面汇率显示 */
   $('rateUsd').textContent=usRate.toFixed(4)+(isDefault?'(默认)':'');
   $('rateHkd').textContent=hkRate.toFixed(4)+(isDefault?'(默认)':'');
   $('rateTime').textContent='更新于 '+new Date().toLocaleTimeString('zh-CN');
-  
   return {usRate,hkRate};
 }
 
@@ -261,18 +239,14 @@ async function fetchSpot(onPage){
     '&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048,m:0+t:7,m:1+t:3'+
     '&fields=f2,f12,f13,f14,f20,f23';
   const ext=r=>{const raw=(r&&r.data&&r.data.diff)||[];return Array.isArray(raw)?raw:Object.values(raw);};
-  const all=[];let pn=1;
-  let skipped=0;
+  const all=[];let pn=1;let skipped=0;
   while(true){
     const r=await jsonpPush2(mkPath(pn,100));
     const list=ext(r);
     if(!list.length)break;
     list.forEach(item=>{
       const price=item.f2;
-      if(price===null||price===undefined||price==='-'||cleanNum(price)===0){
-        skipped++;
-        return;
-      }
+      if(price===null||price===undefined||price==='-'||cleanNum(price)===0){skipped++;return;}
       all.push(item);
     });
     onPage&&onPage(all.length);
@@ -332,27 +306,57 @@ function recentReportDates(n){
   return arr;
 }
 
-/* ================= NCAV 统一计算 ================= */
+/* ================= NCAV 统一计算（含调整后NCAV） ================= */
 function calcRow(code,name,mv,f,rd,isB,currency){
+  /* ===== 原始 NCAV ===== */
   const ca=cleanNum(f.TOTAL_CURRENT_ASSETS);
   const liab=cleanNum(f.TOTAL_LIABILITIES);
   const mi=cleanNum(f.MINORITY_EQUITY);
-  /* 新增：其他权益工具（永续债/优先股，类债属性，从NCAV中扣除）*/
   const oei=cleanNum(f.OTHER_EQUITY_TOOL||f.OTHER_EQUITY_INSTRUMENT||0);
   const ncav=ca-liab-mi-oei;
   if(!(ncav>mv))return null;
+
+  /* ===== 调整后 NCAV ===== */
+  /* 现金类 */
+  const cash=cleanNum(f.MONETARYFUNDS);
+  const tradeFA=cleanNum(f.TRADE_FINASSET_NOTFVTPL||f.TRADE_FIN_ASSETS||0);
+  /* 应收类 */
+  const ar=cleanNum(f.ACCOUNTS_RECE);
+  const nr=cleanNum(f.NOTE_RECE);
+  const otr=cleanNum(f.TOTAL_OTHER_RECE);
+  const fr=cleanNum(f.FINANCE_RECE);
+  /* 存货 */
+  const inv=cleanNum(f.INVENTORY);
+  /* 其他流动资产 */
+  const oca=cleanNum(f.OTHER_CURRENT_ASSETS||f.OTHER_CURRENT_ASSET||0);
+  /* 固定资产类 */
+  const fixed=cleanNum(f.FIXED_ASSET);
+  const cip=cleanNum(f.CIP);
+  const invReal=cleanNum(f.INVEST_REALESTATE);
+
+  const adjNcavRaw=
+    (cash+tradeFA)*1.00
+    +(ar+nr+otr+fr)*0.80
+    +inv*0.60
+    +oca*0.50
+    +(fixed+cip+invReal)*0.15
+    -liab-mi-oei;
+
+  /* ===== 有息负债 ===== */
   const ib=cleanNum(f.SHORT_LOAN)
     +cleanNum(f.NONCURRENT_LIAB_1YEAR||f.NON_CURRENT_LIAB_1YEAR||f.LIAB_1YEAR||0)
     +cleanNum(f.LONG_LOAN)+cleanNum(f.BOND_PAYABLE)
     +cleanNum(f.LEASE_LIABILITY||f.LEASE_LIAB||f.RENT_LEASE||0);
+
   const ta=cleanNum(f.TOTAL_ASSETS);
   let marketLabel='A股';
-  if(isB){
-    marketLabel='B股('+currency+')';
-  }
+  if(isB){marketLabel='B股('+currency+')';}
+
   return {code:code,name:name,rd:rd,
     market:marketLabel,
-    ca:yi(ca),liab:yi(liab),ncav:yi(ncav),ib:yi(ib),mi:yi(mi),oei:yi(oei),
+    ca:yi(ca),liab:yi(liab),
+    ncav:yi(ncav),adjNcav:yi(adjNcavRaw),
+    ib:yi(ib),mi:yi(mi),oei:yi(oei),
     ratio:ta>0?(liab/ta*100):null,mv:yi(mv),ratioNcav:mv/ncav};
 }
 
@@ -362,41 +366,21 @@ async function run(){
   log('开始刷新…');
   try{
     /* ① 并行拉取行情和汇率 */
-    log('① 分页拉取全市场行情与实时汇率（外汇列表接口）…');
+    log('① 分页拉取全市场行情与实时汇率…');
     const [spot,rates]=await Promise.all([fetchSpot(n=>setProg(Math.min(10,n/5700*10))), fetchExchangeRate()]);
     const {usRate,hkRate}=rates;
-    
     if(spot.length<1000)throw new Error('行情仅获取 '+spot.length+' 条，接口异常');
     $('sTotal').textContent=spot.length;
 
     /* ② 粗筛：A股用PB<1，B股全量纳入并换算人民币市值 */
-    const candA=[];
-    const candB=[];
-    const spotMap={};
-    let bCount=0;
-    let invalidMv=0;
-    
+    const candA=[];const candB=[];const spotMap={};let bCount=0;let invalidMv=0;
     spot.forEach(s=>{
-      const code=s.f12;
-      const pb=cleanNum(s.f23);
-      let mv=cleanNum(s.f20);
-      const isB=isBShare(code);
-      let currency='CNY';
-      
-      if(mv<=0){
-        invalidMv++;
-        return;
-      }
-      
+      const code=s.f12;const pb=cleanNum(s.f23);let mv=cleanNum(s.f20);const isB=isBShare(code);let currency='CNY';
+      if(mv<=0){invalidMv++;return;}
       if(isB){
         bCount++;
-        if(code.startsWith('200')){
-          mv=mv*hkRate;
-          currency='HKD';
-        }else if(code.startsWith('900')){
-          mv=mv*usRate;
-          currency='USD';
-        }
+        if(code.startsWith('200')){mv=mv*hkRate;currency='HKD';}
+        else if(code.startsWith('900')){mv=mv*usRate;currency='USD';}
         spotMap[code]={code:s.f12,mkt:s.f13,name:s.f14,mv:mv,pb:pb,isB:true,currency:currency};
         candB.push(spotMap[code]);
       }else{
@@ -404,13 +388,12 @@ async function run(){
         if(pb>0&&pb<1&&mv>0)candA.push(spotMap[code]);
       }
     });
-    
     if(invalidMv>0)log('   额外过滤市值异常(≤0)股票 '+invalidMv+' 只');
     $('sBTotal').textContent=bCount;
     log('   有效行情共 '+spot.length+' 条 (A股 '+(spot.length-bCount)+', B股 '+bCount+')');
     const cand=[...candA,...candB];
     $('sCand').textContent=cand.length;
-    log('② 粗筛候选: A股破净 '+candA.length+' 只, B股全量 '+candB.length+' 只 (B股已按实时汇率换算人民币)');
+    log('② 粗筛候选: A股破净 '+candA.length+' 只, B股全量 '+candB.length+' 只');
     setProg(15);
 
     /* ③ F10 批量：最近3个报告期 */
@@ -434,30 +417,20 @@ async function run(){
     $('sCover').textContent=Object.keys(balMap).length;
 
     /* ④ 单股兜底 */
-    const missingCands=[];
-    cand.forEach(c=>{
-      if(!balMap[c.code])missingCands.push(c);
-    });
+    const missingCands=[];cand.forEach(c=>{if(!balMap[c.code])missingCands.push(c);});
     if(missingCands.length>0){
-      log('④ 发现 '+missingCands.length+' 只候选股批量数据缺失，启动单股兜底: '+
-        missingCands.slice(0,5).map(c=>c.name+'('+c.code+')').join('、')+(missingCands.length>5?'…':''));
+      log('④ 发现 '+missingCands.length+' 只候选股批量数据缺失，启动单股兜底…');
       const tasks=missingCands.map(c=>async()=>{
-        try{
-          const full=await fetchBalanceFull(codeOf(c.code,c.mkt));
-          return full?{c:c,full:full}:null;
-        }catch(e){return null;}
+        try{const full=await fetchBalanceFull(codeOf(c.code,c.mkt));return full?{c:c,full:full}:null;}catch(e){return null;}
       });
       const filled=(await pool(tasks,6,(d,t)=>setProg(55+20*d/t))).filter(Boolean);
-      filled.forEach(x=>{
-        balMap[x.c.code]={rd:String(x.full.REPORT_DATE).slice(0,10),row:x.full};
-      });
+      filled.forEach(x=>{balMap[x.c.code]={rd:String(x.full.REPORT_DATE).slice(0,10),row:x.full};});
       log('   单股兜底补齐 '+filled.length+' 只');
     }
     setProg(78);
 
-    /* ⑤ 计算NCAV */
-    const result=[];
-    cand.forEach(c=>{
+    /* ⑤ 计算NCAV与调整后NCAV */
+    const result=[];cand.forEach(c=>{
       const b=balMap[c.code];if(!b)return;
       const row=calcRow(c.code,c.name,c.mv,b.row,b.rd,c.isB,c.currency);
       if(row)result.push(row);
@@ -465,8 +438,9 @@ async function run(){
 
     const pab=balMap['000001'];
     if(pab)log('单位自检: 平安银行总资产原始值 = '+pab.row.TOTAL_ASSETS+'（正常应约5e12量级）');
-    if(pab)log('字段自检: 平安银行其他权益工具 = '+pab.row.OTHER_EQUITY_TOOL+'（无永续债/优先股则为0或null）');
-    if(pab)log('字段自检: 平安银行租赁负债 = '+pab.row.LEASE_LIABILITY+'（无租赁负债则为0或null）');
+    if(pab)log('字段自检: 平安银行货币资金 = '+pab.row.MONETARYFUNDS);
+    if(pab)log('字段自检: 平安银行应收账款 = '+pab.row.ACCOUNTS_RECE);
+    if(pab)log('字段自检: 平安银行存货 = '+pab.row.INVENTORY);
 
     result.sort((a,b)=>a.ratioNcav-b.ratioNcav);
     $('sFinal').textContent=result.length;
@@ -482,9 +456,11 @@ function setProg(p){$('pgBar').style.width=Math.min(100,p)+'%';}
 
 /* ================= 渲染 ================= */
 function render(rows){
-  const cols=[['代码','code'],['市场','market'],['名称','name'],['报告期','rd'],['流动资产合计(亿)','ca'],['负债合计(亿)','liab'],
-    ['NCAV(亿)','ncav'],['有息负债(亿)','ib'],['少数股东权益(亿)','mi'],['其他权益工具(亿)','oei'],['资产负债率(%)','ratio'],
-    ['总市值(亿,CNY)','mv'],['市值/NCAV','ratioNcav']];
+  const cols=[['代码','code'],['市场','market'],['名称','name'],['报告期','rd'],
+    ['流动资产合计(亿)','ca'],['负债合计(亿)','liab'],
+    ['NCAV(亿)','ncav'],['调整后NCAV(亿)','adjNcav'],
+    ['有息负债(亿)','ib'],['少数股东权益(亿)','mi'],['其他权益工具(亿)','oei'],
+    ['资产负债率(%)','ratio'],['总市值(亿,CNY)','mv'],['市值/NCAV','ratioNcav']];
   $('thead').innerHTML='<tr>'+cols.map(c=>'<th>'+c[0]+'</th>').join('')+'</tr>';
   $('tbody').innerHTML=rows.length?rows.map(r=>'<tr>'+
     cols.map(c=>{const v=r[c[1]];
@@ -495,7 +471,7 @@ function render(rows){
       if(c[1]==='ratioNcav'&&v!=null)s='<span class="tag-low">'+v.toFixed(3)+'</span>';
       if(c[1]==='market'&&v&&v.startsWith('B股'))s='<span class="tag-b">'+v+'</span>';
       return '<td>'+s+'</td>';}).join('')+'</tr>').join('')
-    :'<tr><td colspan="13" style="text-align:center;color:#4a5568;padding:24px">当前无满足 NCAV &gt; 市值 的股票</td></tr>';
+    :'<tr><td colspan="14" style="text-align:center;color:#4a5568;padding:24px">当前无满足 NCAV &gt; 市值 的股票</td></tr>';
 }
 
 /* ================= 定时 ================= */
