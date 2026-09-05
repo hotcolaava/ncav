@@ -62,22 +62,22 @@
 </div>
 
 <div id="tblWrap"><table>
-  <colgroup>
-    <col style="width:6%">
-    <col style="width:8%">
-    <col style="width:8%">
-    <col style="width:8.5%">
-    <col style="width:9%">
-    <col style="width:7.5%">
-    <col style="width:6.5%">
-    <col style="width:7%">
-    <col style="width:6.5%">
-    <col style="width:7%">
-    <col style="width:7%">
-    <col style="width:6%">
-    <col style="width:6.5%">
-    <col style="width:6%">
-  </colgroup>
+	<colgroup>
+		<col style="width:6%">
+		<col style="width:8%">
+		<col style="width:8%">
+		<col style="width:8.5%">
+		<col style="width:9%">
+		<col style="width:7.5%">
+		<col style="width:6.5%">
+		<col style="width:7%">
+		<col style="width:7%">
+		<col style="width:6%">
+		<col style="width:6.5%">
+		<col style="width:6.5%">
+		<col style="width:7%">s
+		<col style="width:6%">
+	</colgroup>
   <thead id="thead"></thead>
   <tbody id="tbody"><tr><td colspan="14" style="text-align:center;color:#4a5568;padding:24px">正在加载…（首次运行需拉取全市场数据，约 1–2 分钟）</td></tr></tbody>
 </table></div>
@@ -465,11 +465,11 @@ function setProg(p){$('pgBar').style.width=Math.min(100,p)+'%';}
 
 /* ================= 渲染 ================= */
 function render(rows){
-  const cols=[['代码','code'],['市场','market'],['名称','name'],['报告期','rd'],
+const cols=[['代码','code'],['市场','market'],['名称','name'],['报告期','rd'],
     ['流动资产合计(亿)','ca'],['负债合计(亿)','liab'],
-    ['NCAV(亿)','ncav'],['调整后NCAV(亿)','adjNcav'],
     ['有息负债(亿)','ib'],['少数股东权益(亿)','mi'],['其他权益工具(亿)','oei'],
-    ['资产负债率(%)','ratio'],['总市值(亿,CNY)','mv'],['市值/NCAV','ratioNcav']];
+    ['资产负债率(%)','ratio'],['总市值(亿,CNY)','mv'],
+    ['NCAV(亿)','ncav'],['调整后NCAV(亿)','adjNcav'],['市值/NCAV','ratioNcav']];
   $('thead').innerHTML='<tr>'+cols.map(c=>'<th>'+c[0]+'</th>').join('')+'</tr>';
   $('tbody').innerHTML=rows.length?rows.map(r=>'<tr>'+
     cols.map(c=>{const v=r[c[1]];
