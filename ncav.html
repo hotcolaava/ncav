@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <title>A/B股烟蒂股 NCAV 筛选器（含调整后NCAV）</title>
 <style>
-  :root{--bg:#0f1419;--panel:#1a2129;--line:#2a3441;--txt:#d5dde5;--dim:#7a8a99;--accent:#3b82f6;--up:#22c55e;}
+  :root{--bg:#0f1419;--panel:#1a2129;--line:#2a3441;--txt:#d5dde5;--dim:#7a8a99;--accent:#3b82f6;--up:#22c55e}
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--txt);font-family:"SF Mono","Cascadia Code",Consolas,"Microsoft YaHei",monospace;font-size:13px;padding:20px}
   h1{font-size:16px;font-weight:600;color:#e6edf3;margin-bottom:4px}
@@ -19,11 +19,12 @@
   .progress>i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
   button{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font:inherit;font-size:12px;cursor:pointer}
   button:hover{filter:brightness(1.1)}button:disabled{background:#3a4656;cursor:not-allowed}
-  #tblWrap{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:auto;max-height:70vh}
-  table{border-collapse:collapse;width:100%;font-size:12px}
-  thead th{position:sticky;top:0;background:#212b36;color:#9fb0c0;font-weight:500;text-align:right;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap;z-index:1}
-  thead th:first-child,tbody td:first-child,thead th:nth-child(2),tbody td:nth-child(2),thead th:nth-child(3),tbody td:nth-child(3){text-align:left}
-  tbody td{padding:7px 10px;border-bottom:1px solid #1e2732;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+  /* ===== 表格：colgroup 固定列宽 + 表头可折行 + 数据不换行 ===== */
+  #tblWrap{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow-x:hidden;overflow-y:auto;max-height:70vh}
+  table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:12px}
+  thead th{position:sticky;top:0;background:#212b36;color:#9fb0c0;font-weight:500;text-align:right;padding:8px 4px;border-bottom:1px solid var(--line);white-space:normal;word-break:break-word;line-height:1.35;vertical-align:bottom;z-index:1}
+  thead th:nth-child(1),tbody td:nth-child(1),thead th:nth-child(2),tbody td:nth-child(2),thead th:nth-child(3),tbody td:nth-child(3){text-align:left}
+  tbody td{padding:7px 4px;border-bottom:1px solid #1e2732;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
   tbody tr:nth-child(even){background:#171e26}
   tbody tr:hover{background:#202b37}
   .num-null{color:#4a5568}
@@ -42,7 +43,6 @@
   筛选条件：NCAV &gt; 总市值；按 市值/NCAV 升序 · 覆盖沪深A股+沪深B股（B股市值已按实时汇率换算人民币）· 已排除退市/停牌股 · 仅供研究
 </div>
 
-<!-- 汇率显示面板 -->
 <div class="rate-box" id="rateBox">
   <span style="color:var(--dim)">当前计算汇率（实时获取）：</span>
   <span class="rate-item">美元/CNY = <b id="rateUsd">获取中…</b></span>
@@ -61,7 +61,26 @@
   <div class="progress"><i id="pgBar"></i></div>
 </div>
 
-<div id="tblWrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+<div id="tblWrap"><table>
+  <colgroup>
+    <col style="width:6%">
+    <col style="width:8%">
+    <col style="width:8%">
+    <col style="width:8.5%">
+    <col style="width:9%">
+    <col style="width:7.5%">
+    <col style="width:6.5%">
+    <col style="width:7%">
+    <col style="width:6.5%">
+    <col style="width:7%">
+    <col style="width:7%">
+    <col style="width:6%">
+    <col style="width:6.5%">
+    <col style="width:6%">
+  </colgroup>
+  <thead id="thead"></thead>
+  <tbody id="tbody"><tr><td colspan="14" style="text-align:center;color:#4a5568;padding:24px">正在加载…（首次运行需拉取全市场数据，约 1–2 分钟）</td></tr></tbody>
+</table></div>
 <div class="log" id="log"></div>
 
 <script>
@@ -317,19 +336,14 @@ function calcRow(code,name,mv,f,rd,isB,currency){
   if(!(ncav>mv))return null;
 
   /* ===== 调整后 NCAV ===== */
-  /* 现金类 */
   const cash=cleanNum(f.MONETARYFUNDS);
   const tradeFA=cleanNum(f.TRADE_FINASSET_NOTFVTPL||f.TRADE_FIN_ASSETS||0);
-  /* 应收类 */
   const ar=cleanNum(f.ACCOUNTS_RECE);
   const nr=cleanNum(f.NOTE_RECE);
   const otr=cleanNum(f.TOTAL_OTHER_RECE);
   const fr=cleanNum(f.FINANCE_RECE);
-  /* 存货 */
   const inv=cleanNum(f.INVENTORY);
-  /* 其他流动资产 */
   const oca=cleanNum(f.OTHER_CURRENT_ASSETS||f.OTHER_CURRENT_ASSET||0);
-  /* 固定资产类 */
   const fixed=cleanNum(f.FIXED_ASSET);
   const cip=cleanNum(f.CIP);
   const invReal=cleanNum(f.INVEST_REALESTATE);
@@ -365,14 +379,12 @@ async function run(){
   $('btnRefresh').disabled=true;$('tbody').innerHTML='';setProg(0);
   log('开始刷新…');
   try{
-    /* ① 并行拉取行情和汇率 */
     log('① 分页拉取全市场行情与实时汇率…');
     const [spot,rates]=await Promise.all([fetchSpot(n=>setProg(Math.min(10,n/5700*10))), fetchExchangeRate()]);
     const {usRate,hkRate}=rates;
     if(spot.length<1000)throw new Error('行情仅获取 '+spot.length+' 条，接口异常');
     $('sTotal').textContent=spot.length;
 
-    /* ② 粗筛：A股用PB<1，B股全量纳入并换算人民币市值 */
     const candA=[];const candB=[];const spotMap={};let bCount=0;let invalidMv=0;
     spot.forEach(s=>{
       const code=s.f12;const pb=cleanNum(s.f23);let mv=cleanNum(s.f20);const isB=isBShare(code);let currency='CNY';
@@ -396,7 +408,6 @@ async function run(){
     log('② 粗筛候选: A股破净 '+candA.length+' 只, B股全量 '+candB.length+' 只');
     setProg(15);
 
-    /* ③ F10 批量：最近3个报告期 */
     const dates=recentReportDates(3);
     log('③ 批量拉取 F10 资产负债表，报告期: '+dates.join(' / '));
     const balMap={};
@@ -416,7 +427,6 @@ async function run(){
     }
     $('sCover').textContent=Object.keys(balMap).length;
 
-    /* ④ 单股兜底 */
     const missingCands=[];cand.forEach(c=>{if(!balMap[c.code])missingCands.push(c);});
     if(missingCands.length>0){
       log('④ 发现 '+missingCands.length+' 只候选股批量数据缺失，启动单股兜底…');
@@ -429,7 +439,6 @@ async function run(){
     }
     setProg(78);
 
-    /* ⑤ 计算NCAV与调整后NCAV */
     const result=[];cand.forEach(c=>{
       const b=balMap[c.code];if(!b)return;
       const row=calcRow(c.code,c.name,c.mv,b.row,b.rd,c.isB,c.currency);
