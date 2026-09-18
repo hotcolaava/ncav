@@ -40,7 +40,7 @@
   口径：<br>
   ① NCAV = 流动资产合计 − 负债合计 − 少数股东权益 − 其他权益工具（含永续债/优先股）<br>
   ② 调整后NCAV = 现金类(货币资金+交易性金融资产)×100% + 应收类(应收账款+应收票据+其他应收款+应收款项融资)×80% + 存货×60% + 其他流动资产×50% + 固定资产类(固定资产+在建工程+投资性房地产)×15% − 负债合计(全额) − 少数股东权益 − 其他权益工具<br>
-  筛选条件：NCAV &gt; 总市值；按 市值/NCAV 升序 · 覆盖沪深A股+沪深B股（B股市值已按实时汇率换算人民币）· 已排除退市/停牌股 · 仅供研究
+  筛选条件（或关系，满足任一即入选）：0 &lt; 市值/NCAV &le; 1 或 0 &lt; 市值/调整后NCAV &le; 1；按 市值/NCAV 升序（无有效 市值/NCAV 的个股排在末尾）· 覆盖沪深A股+沪深B股（B股市值已按实时汇率换算人民币）· 已排除退市/停牌股 · 仅供研究
 </div>
 
 <div class="rate-box" id="rateBox">
@@ -63,23 +63,24 @@
 
 <div id="tblWrap"><table>
 	<colgroup>
-		<col style="width:6%">
-		<col style="width:8%">
-		<col style="width:8%">
-		<col style="width:8.5%">
-		<col style="width:9%">
+		<col style="width:5.5%">
+		<col style="width:7%">
 		<col style="width:7.5%">
+		<col style="width:7.5%">
+		<col style="width:7.5%">
+		<col style="width:7.5%">
+		<col style="width:7%">
 		<col style="width:6.5%">
-		<col style="width:7%">
-		<col style="width:7%">
+		<col style="width:6.5%">
+		<col style="width:5.5%">
+		<col style="width:6.5%">
 		<col style="width:6%">
 		<col style="width:6.5%">
+		<col style="width:5.5%">
 		<col style="width:6.5%">
-		<col style="width:7%">
-		<col style="width:6%">
 	</colgroup>
   <thead id="thead"></thead>
-  <tbody id="tbody"><tr><td colspan="14" style="text-align:center;color:#4a5568;padding:24px">正在加载…（首次运行需拉取全市场数据，约 1–2 分钟）</td></tr></tbody>
+  <tbody id="tbody"><tr><td colspan="15" style="text-align:center;color:#4a5568;padding:24px">正在加载…（首次运行需拉取全市场数据，约 1–2 分钟）</td></tr></tbody>
 </table></div>
 <div class="log" id="log"></div>
 
@@ -333,7 +334,6 @@ function calcRow(code,name,mv,f,rd,isB,currency){
   const mi=cleanNum(f.MINORITY_EQUITY);
   const oei=cleanNum(f.OTHER_EQUITY_TOOL||f.OTHER_EQUITY_INSTRUMENT||0);
   const ncav=ca-liab-mi-oei;
-  if(!(ncav>mv))return null;
 
   /* ===== 调整后 NCAV ===== */
   const cash=cleanNum(f.MONETARYFUNDS);
@@ -356,6 +356,11 @@ function calcRow(code,name,mv,f,rd,isB,currency){
     +(fixed+cip+invReal)*0.15
     -liab-mi-oei;
 
+  /* ===== 筛选（或关系）：0<市值/NCAV≤1 或 0<市值/调整后NCAV≤1，满足任一即入选 ===== */
+  const passNcav=(ncav>0&&mv<=ncav);
+  const passAdj =(adjNcavRaw>0&&mv<=adjNcavRaw);
+  if(!passNcav&&!passAdj)return null;
+
   /* ===== 有息负债 ===== */
   const ib=cleanNum(f.SHORT_LOAN)
     +cleanNum(f.NONCURRENT_LIAB_1YEAR||f.NON_CURRENT_LIAB_1YEAR||f.LIAB_1YEAR||0)
@@ -371,7 +376,9 @@ function calcRow(code,name,mv,f,rd,isB,currency){
     ca:yi(ca),liab:yi(liab),
     ncav:yi(ncav),adjNcav:yi(adjNcavRaw),
     ib:yi(ib),mi:yi(mi),oei:yi(oei),
-    ratio:ta>0?(liab/ta*100):null,mv:yi(mv),ratioNcav:mv/ncav};
+    ratio:ta>0?(liab/ta*100):null,mv:yi(mv),
+    ratioNcav:ncav>0?(mv/ncav):null,
+    ratioAdj:adjNcavRaw>0?(mv/adjNcavRaw):null};
 }
 
 /* ================= 主流程 ================= */
@@ -451,11 +458,16 @@ async function run(){
     if(pab)log('字段自检: 平安银行应收账款 = '+pab.row.ACCOUNTS_RECE);
     if(pab)log('字段自检: 平安银行存货 = '+pab.row.INVENTORY);
 
-    result.sort((a,b)=>a.ratioNcav-b.ratioNcav);
+    /* 排序保持：按 市值/NCAV 升序；无有效该比值的个股（NCAV≤0，仅凭调整后NCAV入选）排在末尾 */
+    result.sort((a,b)=>{
+      const ra=(a.ratioNcav==null||isNaN(a.ratioNcav))?Infinity:a.ratioNcav;
+      const rb=(b.ratioNcav==null||isNaN(b.ratioNcav))?Infinity:b.ratioNcav;
+      return ra-rb;
+    });
     $('sFinal').textContent=result.length;
     render(result);
-    log('完成，入选 '+result.length+' 只（含A股与换算后B股，已排除退市股）。');
-    safeStorage.setItem('ncav_cache',JSON.stringify({ts:Date.now(),data:result,rates:{us:usRate,hk:hkRate}}));
+    log('完成，入选 '+result.length+' 只（满足 市值/NCAV≤1 或 市值/调整后NCAV≤1 任一条件；含A股与换算后B股，已排除退市股）。');
+    safeStorage.setItem('ncav_cache_v2',JSON.stringify({ts:Date.now(),data:result,rates:{us:usRate,hk:hkRate}}));
   }catch(e){
     log('刷新失败: '+e.message,true);
   }
@@ -469,7 +481,8 @@ const cols=[['代码','code'],['市场','market'],['名称','name'],['报告期'
     ['流动资产合计(亿)','ca'],['负债合计(亿)','liab'],
     ['有息负债(亿)','ib'],['少数股东权益(亿)','mi'],['其他权益工具(亿)','oei'],
     ['资产负债率(%)','ratio'],['总市值(亿,CNY)','mv'],
-    ['NCAV(亿)','ncav'],['调整后NCAV(亿)','adjNcav'],['市值/NCAV','ratioNcav']];
+    ['NCAV(亿)','ncav'],['调整后NCAV(亿)','adjNcav'],
+    ['市值/NCAV','ratioNcav'],['市值/调整后NCAV','ratioAdj']];
   $('thead').innerHTML='<tr>'+cols.map(c=>'<th>'+c[0]+'</th>').join('')+'</tr>';
   $('tbody').innerHTML=rows.length?rows.map(r=>'<tr>'+
     cols.map(c=>{const v=r[c[1]];
@@ -477,10 +490,13 @@ const cols=[['代码','code'],['市场','market'],['名称','name'],['报告期'
       if(v==null)s='<span class="num-null">—</span>';
       else if(typeof v==='number')s=v.toFixed(2);
       else s=v;
-      if(c[1]==='ratioNcav'&&v!=null)s='<span class="tag-low">'+v.toFixed(3)+'</span>';
+      if((c[1]==='ratioNcav'||c[1]==='ratioAdj')&&typeof v==='number'){
+        s=v.toFixed(3);
+        if(v<=1)s='<span class="tag-low">'+s+'</span>';
+      }
       if(c[1]==='market'&&v&&v.startsWith('B股'))s='<span class="tag-b">'+v+'</span>';
       return '<td>'+s+'</td>';}).join('')+'</tr>').join('')
-    :'<tr><td colspan="14" style="text-align:center;color:#4a5568;padding:24px">当前无满足 NCAV &gt; 市值 的股票</td></tr>';
+    :'<tr><td colspan="15" style="text-align:center;color:#4a5568;padding:24px">当前无满足 市值/NCAV≤1 或 市值/调整后NCAV≤1 的股票</td></tr>';
 }
 
 /* ================= 定时 ================= */
@@ -504,7 +520,7 @@ setInterval(()=>{
 /* ================= 启动 ================= */
 $('btnRefresh').onclick=run;
 (function init(){
-  const c=safeStorage.getItem('ncav_cache');
+  const c=safeStorage.getItem('ncav_cache_v2');
   if(c){
     try{
       const o=JSON.parse(c);
