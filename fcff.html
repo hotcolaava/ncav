@@ -17,6 +17,7 @@
   .progress>i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
   button{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font:inherit;font-size:12px;cursor:pointer}
   button:hover{filter:brightness(1.1)}button:disabled{background:#3a4656;cursor:not-allowed}
+  .btn-sub{background:#475569}
   #tblWrap{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow-x:auto;overflow-y:auto;max-height:70vh}
   table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:12px}
   thead th{position:sticky;top:0;background:#212b36;color:#9fb0c0;font-weight:500;text-align:right;padding:8px 6px;border-bottom:1px solid var(--line);white-space:normal;word-break:break-word;line-height:1.35;vertical-align:bottom;z-index:1}
@@ -38,22 +39,25 @@
   ① 单年自由现金流 <span class="f">FCF(t) = 经营活动产生的现金流量净额 − 购建固定资产、无形资产和其他长期资产支付的现金</span>（取年报数据）<br>
   ② 近10年平均自由现金流 <span class="f">= Σ FCF(近10个年报) ÷ 10</span><br>
   ③ 估值比率 <span class="f">= 最新总市值 ÷ 近10年平均自由现金流</span><br>
-  <b>估值参考指标（新增）：</b><br>
+  <b>估值参考指标：</b><br>
   有息负债 <span class="f">= 短期借款 + 一年内到期的非流动负债 + 长期借款 + 应付债券</span>（最新报告期资产负债表）<br>
   EV 企业价值 <span class="f">= 最新总市值 + 有息负债 − 货币资金</span><br>
   EBITDA <span class="f">= 利润总额 + 财务费用 + 固定资产折旧 + 无形资产摊销 + 长期待摊费用摊销</span>（最近年报，利润表+现金流量表补充资料）<br>
   EV/EBITDA <span class="f">= EV ÷ EBITDA</span>（&lt;8 标绿为低估参考）<br>
-  <b>入选条件（须同时满足）：</b>沪深A股（含北交所）· 最新资产负债率 ≤ 60%（&gt;60% 自动剔除）· 近10年年报数据齐全 · 近10年平均自由现金流 &gt; 0 · <span class="f">0 &lt; 市值/近10年平均FCF &lt; 7</span>；按估值比率升序 · 已排除退市/停牌股 · 仅供研究<br>
-  数据源：东方财富 push2 实时行情 + datacenter 资产负债表/利润表/现金流量表批量接口（JSONP）
+  <b>入选条件（须同时满足）：</b>沪深A股（含北交所）· 最新资产负债率 ≤ 60%（&gt;60% 自动剔除）· 近10年年报数据齐全 · 近10年平均自由现金流 &gt; 0 · <span class="f">0 &lt; 市值/近10年平均FCF &lt; 7</span>；按估值比率升序 · 仅供研究<br>
 </div>
 
 <div class="bar">
   <button id="btnRefresh">刷新数据</button>
+  <button id="btnForce" class="btn-sub">强制全量刷新</button>
   <span class="stat">A股总数<b id="sTotal">—</b></span>
   <span class="stat">负债率覆盖<b id="sDebt">—</b></span>
   <span class="stat">10年FCF覆盖<b id="sFcf">—</b></span>
   <span class="stat">最终入选<b id="sFinal">—</b></span>
   <span class="stat">数据时间<b id="sCache">—</b></span>
+  <span class="stat">本次请求<b id="sReq">—</b></span>
+  <span class="stat">存储后端<b id="sStore">探测中…</b></span>
+  <span class="stat">行情源<b id="sSource">push2</b></span>
   <div class="progress"><i id="pgBar"></i></div>
 </div>
 
@@ -64,7 +68,7 @@
     <col style="width:11%"><col style="width:10%"><col style="width:13%"><col style="width:8%">
   </colgroup>
   <thead id="thead"></thead>
-  <tbody id="tbody"><tr><td colspan="10" style="text-align:center;color:#4a5568;padding:24px">暂无数据。请点击上方"刷新数据"按钮拉取全市场数据（首次约需 2–4 分钟）</td></tr></tbody>
+  <tbody id="tbody"><tr><td colspan="10" style="text-align:center;color:#4a5568;padding:24px">暂无数据。请点击上方"刷新数据"按钮拉取全市场数据（首次因限速模式约需 3–8 分钟；日常刷新因本地缓存通常仅需数十秒）</td></tr></tbody>
 </table></div>
 <div class="log" id="log"></div>
 
@@ -75,12 +79,119 @@ const log=(m,e)=>{const d=document.createElement('div');d.textContent='['+new Da
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const fmtTime=ts=>{const d=new Date(ts);const p=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());};
 
-/* 安全存储（含内存兜底） */
+/* ================= 缓存与压缩配置 ================= */
+const CACHE_PRE='fcf5_';
+const TTL_BAL=8*3600*1000;
+const TTL_NEWEST=12*3600*1000;
+const STALE_DAYS=15;                /* 成交日期陈旧阈值（天） */
+const DC_MIN_GAP=1500;
+const DC_JITTER=800;
+const COOL_SWITCH_MS=8000;          /* ★激进切换阈值：全节点冷却且最早解禁>8秒即切腾讯 */
+const W=1e4;
+const HAS_ZIP=(typeof CompressionStream!=='undefined')&&(typeof DecompressionStream!=='undefined');
+const stats={dc:0,push:0,saved:0,tencent:0,sina:0};
+let _storageWarned=false;
+
+log('gzip 压缩: '+(HAS_ZIP?'✓ 已启用':'✗ 不可用（降级为明文存储）'));
+log('限速配置（方案A+B）: DC间隔 '+DC_MIN_GAP+'+'+DC_JITTER+'ms | push2指数退避 | 并发2 | 指数冷却');
+log('★降级策略（激进版，与NCAV一致）: push2全冷却且最早解禁>'+(COOL_SWITCH_MS/1000)+'s → 立即切腾讯（合并部分数据）');
+log('★过滤: 退市(名称+黑名单+日期) + 纯A股白名单 | ★反查: 全量分页 | ★腾讯: 批次重试+覆盖率');
+
+/* ================= ★退市股与B股过滤 ================= */
+const DELISTED_BLACKLIST=new Set(['002308','000416','301139']);   /* 精简实证版：*ST威创、*ST民控（如发现新退市股请添加代码） */
+const isDelistedName=name=>String(name||'').indexOf('退')>=0;
+const isDelistedCode=code=>DELISTED_BLACKLIST.has(String(code));
+/* 纯A股代码白名单（含北交所；剔除沪深B股200xxx/900xxx及新三板/老三板） */
+const A_STOCK_RE=/^(?:00\d|30\d|60\d|688|689|43\d|83\d|87\d|92\d)\d{3}$/;
+/* 行情成交日期陈旧判断（腾讯[30]"YYYYMMDDHHMMSS"；新浪[30]"YYYY-MM-DD"） */
+function isStaleDateStr(dateStr){
+  const raw=String(dateStr||'').replace(/[^0-9]/g,'');
+  if(raw.length>=8){
+    const ds=raw.slice(0,8);
+    const y=+ds.slice(0,4),m=+ds.slice(4,6),d=+ds.slice(6,8);
+    const t=new Date(y,m-1,d).getTime();
+    if(!isNaN(t)&&y>2000)return (Date.now()-t)>STALE_DAYS*86400000;
+  }
+  return null;
+}
+function isStaleQuoteTencent(f){
+  const r=isStaleDateStr(f[30]);
+  if(r!==null)return r;
+  return !(parseFloat(f[36])>0);
+}
+function isStaleQuoteSina(f){
+  const r=isStaleDateStr(f[30]);
+  if(r!==null)return r;
+  return !(parseFloat(f[8])>0);
+}
+
+/* ================= IndexedDB Promise 封装 ================= */
+const IDB_NAME='fcf_cache_db';
+const IDB_STORE='kv';
+let _db=null;
+async function openIDB(){
+  if(_db)return _db;
+  return new Promise((res,rej)=>{
+    const r=indexedDB.open(IDB_NAME,1);
+    r.onupgradeneeded=e=>{const db=e.target.result;if(!db.objectStoreNames.contains(IDB_STORE))db.createObjectStore(IDB_STORE);};
+    r.onsuccess=e=>{_db=e.target.result;res(_db);};
+    r.onerror=()=>rej(r.error);
+  });
+}
+function idbReq(req){return new Promise((res,rej)=>{req.onsuccess=()=>res(req.result);req.onerror=()=>rej(req.error);});}
+async function idbGet(key){const db=await openIDB();const tx=db.transaction(IDB_STORE,'readonly');return await idbReq(tx.objectStore(IDB_STORE).get(key));}
+async function idbPut(key,val){
+  const db=await openIDB();const tx=db.transaction(IDB_STORE,'readwrite');
+  tx.objectStore(IDB_STORE).put(val,key);
+  return new Promise((res,rej)=>{tx.oncomplete=()=>res(true);tx.onerror=()=>rej(tx.error);tx.onabort=()=>rej(tx.error||new Error('tx aborted'));});
+}
+async function idbRemove(key){
+  const db=await openIDB();const tx=db.transaction(IDB_STORE,'readwrite');
+  tx.objectStore(IDB_STORE).delete(key);
+  return new Promise((res,rej)=>{tx.oncomplete=()=>res(true);tx.onerror=()=>rej(tx.error);});
+}
+async function idbKeys(){const db=await openIDB();const tx=db.transaction(IDB_STORE,'readonly');return await idbReq(tx.objectStore(IDB_STORE).getAllKeys());}
+
+let USE_IDB=false;
+async function probeIDB(){
+  try{
+    await idbPut('__probe__','ok');
+    const v=await idbGet('__probe__');
+    await idbRemove('__probe__');
+    USE_IDB=(v==='ok');
+  }catch(e){USE_IDB=false;}
+  $('sStore').textContent=USE_IDB?'IndexedDB':'localStorage';
+  $('sStore').title=USE_IDB?'存储后端：IndexedDB（配额数百MB）':'降级：localStorage（5MB限制）';
+  log('存储后端: '+(USE_IDB?'✓ IndexedDB':'✗ 不可用，降级为 localStorage'));
+  return USE_IDB;
+}
+
+/* ================= 安全存储（三级降级） ================= */
 const memoryStorage={};
-const safeStorage={
+const lsStorage={
   getItem:k=>{try{return localStorage.getItem(k)}catch(e){return memoryStorage[k]||null}},
-  setItem:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){memoryStorage[k]=v}}
+  setItem:(k,v)=>{try{localStorage.setItem(k,v);return true}catch(e){memoryStorage[k]=v;return false}},
+  removeItem:k=>{try{localStorage.removeItem(k)}catch(e){}delete memoryStorage[k];},
+  keys:()=>{try{return Object.keys(localStorage)}catch(e){return Object.keys(memoryStorage)}}
 };
+async function storeGet(key){
+  if(USE_IDB){const v=await idbGet(key);if(v===undefined)return null;return v;}
+  return lsStorage.getItem(key);
+}
+async function storeSet(key,val){
+  if(USE_IDB)return await idbPut(key,val);
+  const s=(val instanceof Uint8Array)?'b64:'+btoa(String.fromCharCode.apply(null,val)):val;
+  return lsStorage.setItem(key,s);
+}
+async function storeRemove(key){
+  if(USE_IDB)return await idbRemove(key);
+  lsStorage.removeItem(key);return true;
+}
+async function storeKeys(){
+  if(USE_IDB)return await idbKeys();
+  return lsStorage.keys();
+}
+
 const cleanNum=v=>{
   if(v===null||v===undefined||v==='')return 0;
   if(typeof v==='number')return v;
@@ -88,18 +199,16 @@ const cleanNum=v=>{
 };
 const yi=v=>v==null||isNaN(v)?null:(v/1e8);
 const codeOf=code=>{
-  if(String(code).match(/^(6|9)/))return code+'.SH';
+  if(String(code).match(/^6/))return code+'.SH';
   if(code.startsWith('8')||code.startsWith('4')||code.startsWith('92'))return code+'.BJ';
   return code+'.SZ';
 };
-/* 多字段名兜底取数（东方财富不同报表接口字段命名有差异） */
 const pickNum=(r,...keys)=>{
   for(const k of keys){
     if(r[k]!==undefined&&r[k]!==null&&r[k]!=='')return cleanNum(r[k]);
   }
   return 0;
 };
-/* 从资产负债表行提取有息负债相关科目（新增） */
 function extractDebtFields(r){
   return {
     cash:     pickNum(r,'MONETARYFUNDS','MONETARY_CAPITAL','MONETARYFUNDS_STR'),
@@ -110,24 +219,207 @@ function extractDebtFields(r){
   };
 }
 
-/* ================= 域名池 ================= */
+/* ================= gzip 压缩/解压 ================= */
+async function zipToU8(s){
+  if(!HAS_ZIP)return null;
+  try{
+    const u8=new TextEncoder().encode(s);
+    const z=new Blob([u8]).stream().pipeThrough(new CompressionStream('gzip'));
+    const buf=await new Response(z).arrayBuffer();
+    return new Uint8Array(buf);
+  }catch(e){return null;}
+}
+async function unzipFromU8(a){
+  if(!HAS_ZIP||!(a instanceof Uint8Array))return null;
+  try{
+    const z=new Blob([a]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(z).text();
+  }catch(e){return null;}
+}
+async function u8ToB64(a){
+  let bin='';const CH=0x8000;
+  for(let i=0;i<a.length;i+=CH)bin+=String.fromCharCode.apply(null,a.subarray(i,i+CH));
+  return btoa(bin);
+}
+async function b64ToU8(b64){return Uint8Array.from(atob(b64),c=>c.charCodeAt(0));}
+
+/* ================= 缓存读写 ================= */
+async function cacheGet(key){
+  try{
+    const raw=await storeGet(key);
+    if(raw===null||raw===undefined)return null;
+    let s=null;
+    if(USE_IDB){
+      if(raw instanceof Uint8Array)s=await unzipFromU8(raw);
+      else if(typeof raw==='string')s=raw;
+    }else{
+      if(typeof raw==='string'&&raw.indexOf('b64:')===0)s=await unzipFromU8(await b64ToU8(raw.slice(4)));
+      else if(typeof raw==='string')s=raw;
+    }
+    if(!s)return null;
+    const o=JSON.parse(s);
+    return (o&&o.data!==undefined)?o:null;
+  }catch(e){return null;}
+}
+async function cachePut(key,data,extra){
+  const payload=JSON.stringify(Object.assign({ts:Date.now(),data:data},extra||{}));
+  try{
+    if(USE_IDB){
+      const z=await zipToU8(payload);
+      if(z)return await storeSet(key,z);
+      return await storeSet(key,payload);
+    }else{
+      const z=await zipToU8(payload);
+      if(z)return storeSet(key,'b64:'+await u8ToB64(z));
+      return storeSet(key,payload);
+    }
+  }catch(e){
+    if(USE_IDB){
+      log('IndexedDB 写入失败，降级 localStorage: '+e.message,true);
+      USE_IDB=false;$('sStore').textContent='localStorage(降级)';
+      return cachePut(key,data,extra);
+    }
+    if(!_storageWarned){_storageWarned=true;log('警告: 存储空间不足，缓存仅保存在内存中',true);}
+    memoryStorage[key]=payload;
+    return false;
+  }
+}
+async function clearAllCache(){
+  let n=0;
+  const ks=(await storeKeys()).filter(k=>k==='fcf_cache_v2'||k.indexOf(CACHE_PRE)===0||k.indexOf('fcf4_')===0||k.indexOf('fcf3_')===0);
+  for(const k of ks){await storeRemove(k);n++;}
+  ['fcf_cache_v2','fcf4_result','fcf3_result'].forEach(k=>{try{localStorage.removeItem(k);n++;}catch(e){}});
+  return n;
+}
+async function reportStorage(){
+  try{
+    let total=0;const by={};
+    if(USE_IDB){
+      const ks=await idbKeys();
+      for(const k of ks){
+        const v=await idbGet(k);
+        let b=0;
+        if(v instanceof Uint8Array)b=v.byteLength;
+        else if(typeof v==='string')b=v.length*2;
+        total+=b+(k.length*2);
+        const p=String(k).replace(/[\d\-]+.*$/,'')||k;
+        by[p]=(by[p]||0)+b;
+      }
+    }else{
+      for(const k of lsStorage.keys()){
+        const v=(()=>{try{return localStorage.getItem(k)||''}catch(e){return memoryStorage[k]||''}})();
+        const b=(v.length+k.length)*2;
+        total+=b;
+        const p=k.replace(/[\d\-]+.*$/,'')||k;
+        by[p]=(by[p]||0)+b;
+      }
+    }
+    const mb=n=>(n/1048576).toFixed(2)+'MB';
+    log('存储占用: 合计 '+mb(total)+'（'+(USE_IDB?'IndexedDB，配额数百MB':'localStorage，配额约5MB')+'）');
+    Object.keys(by).sort((a,b)=>by[b]-by[a]).slice(0,8).forEach(k=>log('   '+k+': '+mb(by[k])));
+  }catch(e){}
+}
+
+/* ================= 万元精度压缩打包 ================= */
+function packCash(map,isFull){
+  const o={};
+  for(const c in map){
+    const v=map[c];
+    if(isFull)o[c]=[v.op,v.capex,v.depr||0,v.amortInt||0,v.amortLong||0].map(x=>Math.round(x/W)).join(',');
+    else o[c]=[v.op,v.capex].map(x=>Math.round(x/W)).join(',');
+  }
+  return o;
+}
+function unpackCash(o,isFull){
+  const m={};
+  for(const c in o){
+    const a=String(o[c]).split(',').map(x=>+x||0);
+    if(isFull)m[c]={op:a[0]*W,capex:a[1]*W,depr:(a[2]||0)*W,amortInt:(a[3]||0)*W,amortLong:(a[4]||0)*W};
+    else m[c]={op:a[0]*W,capex:a[1]*W};
+  }
+  return m;
+}
+function packDebt(map){
+  const o={};
+  for(const c in map){
+    const r=map[c];
+    const rdNum=parseInt(String(r.rd).replace(/-/g,''),10);
+    o[c]=[rdNum,Math.round(r.ratio*100),Math.round((r.cash||0)/W),Math.round((r.shortLoan||0)/W),
+          Math.round((r.noncur1y||0)/W),Math.round((r.longLoan||0)/W),Math.round((r.bondPay||0)/W)].join(',');
+  }
+  return o;
+}
+function unpackDebt(o){
+  const m={};
+  for(const c in o){
+    const a=String(o[c]).split(',').map(x=>+x||0);
+    const rdStr=String(a[0]);
+    const rd=rdStr.length===8?(rdStr.slice(0,4)+'-'+rdStr.slice(4,6)+'-'+rdStr.slice(6,8)):'';
+    m[c]={rd:rd,ratio:(a[1]||0)/100,cash:a[2]*W,shortLoan:a[3]*W,noncur1y:a[4]*W,longLoan:a[5]*W,bondPay:a[6]*W};
+  }
+  return m;
+}
+function packIncome(slice){
+  const o={};
+  for(const cc in slice){
+    const a=slice[cc];
+    if(Array.isArray(a)&&a.length>=2)o[cc]=[Math.round(a[0]/W),Math.round(a[1]/W)].join(',');
+  }
+  return o;
+}
+function unpackIncome(o){
+  const m={};
+  for(const cc in o){
+    const a=String(o[cc]).split(',').map(x=>+x||0);
+    if(a.length>=2)m[cc]=[a[0]*W,a[1]*W];
+  }
+  return m;
+}
+
+/* ================= push2 域名池（方案B：指数冷却） ================= */
 const PUSH2_HOSTS=[
-  {host:'29.push2.eastmoney.com',label:'29实时',fails:0,cooldownUntil:0},
-  {host:'79.push2.eastmoney.com',label:'79实时',fails:0,cooldownUntil:0},
-  {host:'91.push2.eastmoney.com',label:'91实时',fails:0,cooldownUntil:0},
-  {host:'push2delay.eastmoney.com',label:'延迟镜像',fails:0,cooldownUntil:0},
-  {host:'82.push2.eastmoney.com',label:'82备用',fails:0,cooldownUntil:0},
-  {host:'17.push2.eastmoney.com',label:'17备用',fails:0,cooldownUntil:0},
+  {host:'29.push2.eastmoney.com',label:'29实时',fails:0,cooldownUntil:0,cooldownLevel:0},
+  {host:'79.push2.eastmoney.com',label:'79实时',fails:0,cooldownUntil:0,cooldownLevel:0},
+  {host:'91.push2.eastmoney.com',label:'91实时',fails:0,cooldownUntil:0,cooldownLevel:0},
+  {host:'push2delay.eastmoney.com',label:'延迟镜像',fails:0,cooldownUntil:0,cooldownLevel:0},
+  {host:'82.push2.eastmoney.com',label:'82备用',fails:0,cooldownUntil:0,cooldownLevel:0},
+  {host:'17.push2.eastmoney.com',label:'17备用',fails:0,cooldownUntil:0,cooldownLevel:0},
 ];
 function getAvailableHost(){
   const now=Date.now();
   for(const h of PUSH2_HOSTS){if(now<h.cooldownUntil)continue;return h;}
-  PUSH2_HOSTS.sort((a,b)=>a.cooldownUntil-b.cooldownUntil);
+  PUSH2_HOSTS.sort((a,b)=>a.cooldownUntil-b.cooldownUntil);   /* 全冷却时返回最早解禁的 */
   return PUSH2_HOSTS[0];
 }
 function markHost(h,success){
-  if(success){h.fails=0;h.cooldownUntil=0;}
-  else{h.fails++;if(h.fails>=2){h.cooldownUntil=Date.now()+30000;h.fails=0;log('节点 '+h.label+' 连续失败，冷却30秒');}}
+  if(success){h.fails=0;h.cooldownUntil=0;h.cooldownLevel=0;}
+  else{
+    h.fails++;
+    if(h.fails>=2){
+      h.cooldownLevel=Math.min((h.cooldownLevel||0)+1,5);
+      const cds=[30e3,60e3,180e3,300e3,600e3];
+      h.cooldownUntil=Date.now()+cds[h.cooldownLevel-1];
+      h.fails=0;
+      log('节点 '+h.label+' 失败，冷却 '+(cds[h.cooldownLevel-1]/1000)+'s（等级'+h.cooldownLevel+'）');
+    }
+  }
+}
+/* ★激进切换核心（与NCAV页面一致）：
+   全节点冷却时看【最早】解禁时间：
+   - >8秒 → 抛 PUSH2_ALL_COOLING，fetchSpot 立即切腾讯（不再傻等最长10分钟）
+   - ≤8秒 → 只等最早节点解禁，继续用push2 */
+async function checkGlobalCircuitBreaker(){
+  const now=Date.now();
+  const allCooling=PUSH2_HOSTS.every(h=>now<h.cooldownUntil);
+  if(allCooling){
+    const minWait=Math.min(...PUSH2_HOSTS.map(h=>h.cooldownUntil-now));
+    if(minWait>COOL_SWITCH_MS){
+      const err=new Error('所有push2节点冷却中，最早解禁还需 '+Math.ceil(minWait/1000)+'s（>'+COOL_SWITCH_MS/1000+'s阈值）');
+      err.code='PUSH2_ALL_COOLING';
+      throw err;
+    }
+    await sleep(minWait+500);
+  }
 }
 let _cb=0;
 function jsonpSingle(url,label,cbParam){
@@ -142,18 +434,45 @@ function jsonpSingle(url,label,cbParam){
     document.head.appendChild(s);
   });
 }
+function loadVarScript(url,{charset,noReferrer,timeout=15000}={}){
+  return new Promise((res,rej)=>{
+    const s=document.createElement('script');
+    if(charset)s.charset=charset;
+    if(noReferrer)s.referrerPolicy='no-referrer';
+    const timer=setTimeout(()=>{cleanup();rej(new Error('加载超时'));},timeout);
+    function cleanup(){clearTimeout(timer);if(s.parentNode)s.parentNode.removeChild(s);}
+    s.onload=()=>{cleanup();res(true);};
+    s.onerror=()=>{cleanup();rej(new Error('网络失败'));};
+    s.src=url;
+    document.head.appendChild(s);
+  });
+}
+/* push2 指数退避重试（checkGlobalCircuitBreaker在try外，PUSH2_ALL_COOLING直接冒泡给fetchSpot） */
 async function jsonpPush2(path){
   for(let i=0;i<PUSH2_HOSTS.length*3;i++){
+    await checkGlobalCircuitBreaker();
     const h=getAvailableHost();
-    try{const r=await jsonpSingle('https://'+h.host+path,h.label,'cb');markHost(h,true);return r;}
-    catch(e){markHost(h,false);if(i<PUSH2_HOSTS.length*3-1)await sleep(800);}
+    try{const r=await jsonpSingle('https://'+h.host+path,h.label,'cb');markHost(h,true);stats.push++;return r;}
+    catch(e){
+      markHost(h,false);
+      if(i<PUSH2_HOSTS.length*3-1)await sleep(800*Math.pow(2,i%3)+Math.random()*500);
+    }
   }
   throw new Error('所有push2节点均不可用');
 }
+let _dcChain=Promise.resolve();
+function dcGate(){
+  const p=_dcChain.then(()=>sleep(DC_MIN_GAP+Math.random()*DC_JITTER));
+  _dcChain=p.catch(()=>{});
+  return p;
+}
 async function jsonpDC(url,retries=3){
   for(let i=0;i<retries;i++){
-    try{return await jsonpSingle(url,'DC','callback');}
-    catch(e){if(i<retries-1)await sleep(1000);}
+    try{await dcGate();stats.dc++;return await jsonpSingle(url,'DC','callback');}
+    catch(e){
+      if(e&&e.code==='PUSH2_ALL_COOLING')throw e;   /* 直接上抛（与NCAV一致） */
+      if(i<retries-1)await sleep(1800+Math.random()*1200);
+    }
   }
   throw new Error('datacenter接口失败: '+url.slice(0,80)+'…');
 }
@@ -167,34 +486,264 @@ async function pool(tasks,limit,onOne){
   await Promise.all(workers);return ret;
 }
 
-/* ================= ① 行情：分页拉取沪深A股+北交所（含退市/停牌过滤） ================= */
+/* ================= ★腾讯/新浪代码前缀（剔除B股，与NCAV口径一致） ================= */
+function tencentPrefix(code){
+  const c=String(code);
+  if(c.startsWith('6'))return 'sh'+c;                    /* 沪A主板+科创板 */
+  if(c.startsWith('9'))return null;                      /* ★沪B 900xxx剔除（原'9'→'sh'是B股混入漏洞） */
+  if(c.startsWith('2'))return null;                      /* ★深B 200xxx剔除 */
+  if(c.startsWith('8')||c.startsWith('4'))return null;   /* 北交所/新三板（腾讯不支持） */
+  return 'sz'+c;                                         /* 0/3开头深A股 */
+}
+
+/* ★代码列表反查（全量分页按count终止 + 名称/黑名单/A股白名单三重过滤） */
+async function fetchStockCodesFromDC(){
+  const dates=recentReportDates(2);
+  const codeSet=new Set();
+  let delistedFiltered=0,records=0,total=Infinity;
+  for(const d of dates){
+    let page=1;
+    try{
+      while(page<=40){                                   /* 全量分页：按count终止，不再20页截断 */
+        const url='https://datacenter-web.eastmoney.com/api/data/v1/get?'+
+          'reportName=RPT_F10_FINANCE_GBALANCE&columns=SECURITY_CODE,SECURITY_NAME_ABBR'+
+          '&filter=(REPORT_DATE%3D%27'+d+'%27)'+
+          '&sortColumns=SECURITY_CODE&sortTypes=1&pageSize=500&pageNumber='+page;
+        const r=await jsonpDC(url);
+        const data=r&&r.result&&r.result.data;
+        if(!data||!data.length)break;
+        if(r.result.count)total=r.result.count;
+        records+=data.length;
+        data.forEach(x=>{
+          if(!x.SECURITY_CODE)return;
+          if(isDelistedName(x.SECURITY_NAME_ABBR)){delistedFiltered++;return;}
+          if(isDelistedCode(x.SECURITY_CODE))return;
+          codeSet.add(String(x.SECURITY_CODE));
+        });
+        if(records>=total)break;
+        page++;
+      }
+    }catch(e){break;}
+    if(codeSet.size>1000)break;
+  }
+  const allCodes=[...codeSet];
+  const aCodes=allCodes.filter(c=>A_STOCK_RE.test(c));
+  log('   代码反查: '+records+'/'+total+'条 → 唯一代码'+allCodes.length+' → 纯A股 '+aCodes.length+' 只（已剔除B股/退市/新三板）');
+  if(delistedFiltered>0)log('   按名称剔除退市股 '+delistedFiltered+' 个');
+  return aCodes;
+}
+
+/* ★腾讯批量行情（批次重试×3+跳过续拉+过滤+覆盖率日志，与NCAV一致） */
+async function fetchQuoteTencent(codes){
+  const prefixed=codes.map(tencentPrefix).filter(Boolean);
+  if(!prefixed.length)return [];
+  const all=[];let staleCnt=0,blackCnt=0,failedBatches=0,consecFail=0;
+  const expected=prefixed.length;
+  for(let i=0;i<prefixed.length;i+=50){
+    const batch=prefixed.slice(i,i+50);
+    const url='https://qt.gtimg.cn/q='+batch.join(',');
+    let loaded=false;
+    for(let attempt=0;attempt<3&&!loaded;attempt++){
+      try{
+        await loadVarScript(url,{charset:'gbk',timeout:12000});
+        loaded=true;
+        if(attempt>0)log('   腾讯批次第'+(attempt+1)+'次重试成功');
+      }catch(e){await sleep(2500+attempt*2000);}
+    }
+    if(!loaded){
+      failedBatches++;consecFail++;
+      log('   腾讯批次加载失败(跳过'+batch.length+'只,已重试3次)',true);
+      if(consecFail>=4){
+        log('   连续4批失败，疑似限流，终止腾讯拉取（已获取'+all.length+'只）',true);
+        break;
+      }
+      continue;
+    }
+    consecFail=0;
+    stats.tencent++;
+    for(const p of batch){
+      const v=window['v_'+p];
+      if(typeof v==='string'){
+        const f=v.split('~');
+        const rawCode=p.slice(2);
+        if(f.length>=46&&+f[3]>0){
+          if(isDelistedName(f[1])){}
+          else if(isDelistedCode(rawCode)){blackCnt++;}
+          else if(isStaleQuoteTencent(f)){staleCnt++;}
+          else{
+            all.push({f12:rawCode,f14:f[1],f2:parseFloat(f[3])||0,
+                      f20:(parseFloat(f[45])||0)*1e8});
+          }
+        }
+      }
+      try{delete window['v_'+p];}catch(e){}
+    }
+    await sleep(700+Math.random()*400);
+  }
+  const pct=expected?(all.length/expected*100).toFixed(1):'0';
+  log('   腾讯行情覆盖: '+all.length+'/'+expected+'（'+pct+'%）'+(failedBatches>0?'，失败批次'+failedBatches:''));
+  if(expected&&all.length<expected*0.85)log('   ⚠ 腾讯覆盖率<85%，部分股票缺失',true);
+  if(blackCnt>0)log('   剔除黑名单退市股 '+blackCnt+' 只');
+  if(staleCnt>0)log('   剔除成交日期陈旧(>'+STALE_DAYS+'天)股票 '+staleCnt+' 只');
+  return all;
+}
+
+/* ★新浪批量行情（同上过滤+重试） */
+async function fetchQuoteSina(codes){
+  const prefixed=codes.map(tencentPrefix).filter(Boolean);
+  if(!prefixed.length)return [];
+  const all=[];let blackCnt=0,staleCnt=0,consecFail=0;
+  const expected=prefixed.length;
+  for(let i=0;i<prefixed.length;i+=30){
+    const batch=prefixed.slice(i,i+30);
+    const url='https://hq.sinajs.cn/list='+batch.join(',');
+    let loaded=false;
+    for(let attempt=0;attempt<3&&!loaded;attempt++){
+      try{await loadVarScript(url,{charset:'gbk',noReferrer:true,timeout:12000});loaded=true;}
+      catch(e){await sleep(2500+attempt*2000);}
+    }
+    if(!loaded){
+      consecFail++;
+      log('   新浪批次加载失败(跳过'+batch.length+'只)',true);
+      if(consecFail>=3)break;
+      continue;
+    }
+    consecFail=0;
+    stats.sina++;
+    for(const p of batch){
+      const v=window['hq_str_'+p];
+      if(typeof v==='string'){
+        const f=v.split(',');
+        const rawCode=p.slice(2);
+        if(f.length>=32&&+f[3]>0){
+          if(isDelistedName(f[0])){}
+          else if(isDelistedCode(rawCode)){blackCnt++;}
+          else if(isStaleQuoteSina(f)){staleCnt++;}
+          else all.push({f12:rawCode,f14:f[0],f2:parseFloat(f[3])||0,f20:null});
+        }
+      }
+      try{delete window['hq_str_'+p];}catch(e){}
+    }
+    await sleep(1000+Math.random()*500);
+  }
+  const pct=expected?(all.length/expected*100).toFixed(1):'0';
+  log('   新浪行情覆盖: '+all.length+'/'+expected+'（'+pct+'%）');
+  if(blackCnt+staleCnt>0)log('   剔除退市/陈旧股票 '+(blackCnt+staleCnt)+' 只');
+  return all;
+}
+
+/* ★代码列表缓存读写（写入前过滤+读取时清洗） */
+async function getCachedStockCodes(){
+  try{
+    const c=await cacheGet(CACHE_PRE+'stock_codes');
+    if(!c||!Array.isArray(c.data))return null;
+    const cleaned=c.data.filter(code=>A_STOCK_RE.test(code)&&!isDelistedCode(code));
+    if(cleaned.length<c.data.length)log('   代码列表缓存清洗: '+c.data.length+' → '+cleaned.length+'（剔除B股/退市码 '+(c.data.length-cleaned.length)+' 个）');
+    return cleaned.length>100?cleaned:null;
+  }catch(e){return null;}
+}
+async function cacheStockCodes(codes){
+  const filtered=codes.filter(c=>A_STOCK_RE.test(String(c))&&!isDelistedCode(c));
+  await cachePut(CACHE_PRE+'stock_codes',filtered);
+}
+
+/* ================= ① 行情（★激进切换降级链，与NCAV一致） ================= */
 async function fetchSpot(onPage){
+  /* fs参数不含B股市场，主源天然纯A股 */
   const mkPath=(pn,pz)=>'/api/qt/clist/get?pn='+pn+'&pz='+pz+'&po=1&np=1'+
     '&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f12'+
     '&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048'+
     '&fields=f2,f12,f14,f20';
-  const all=[];let pn=1,skipped=0;
-  while(true){
-    const r=await jsonpPush2(mkPath(pn,100));
-    const raw=(r&&r.data&&r.data.diff)||[];
-    const list=Array.isArray(raw)?raw:Object.values(raw);
-    if(!list.length)break;
-    list.forEach(item=>{
-      const p=item.f2;
-      if(p===null||p===undefined||p==='-'||cleanNum(p)===0){skipped++;return;}
-      if(cleanNum(item.f20)<=0){skipped++;return;}
-      all.push(item);
-    });
-    onPage&&onPage(all.length);
-    if(list.length<100)break;
-    pn++;if(pn>80)break;
-    await sleep(1000);
+  const all=[];let pn=1,skipped=0,delisted=0;
+  try{
+    while(true){
+      const r=await jsonpPush2(mkPath(pn,100));
+      const raw=(r&&r.data&&r.data.diff)||[];
+      const list=Array.isArray(raw)?raw:Object.values(raw);
+      if(!list.length)break;
+      list.forEach(item=>{
+        const p=item.f2;
+        if(p===null||p===undefined||p==='-'||cleanNum(p)===0){skipped++;return;}
+        if(cleanNum(item.f20)<=0){skipped++;return;}
+        if(isDelistedName(item.f14)||isDelistedCode(item.f12)){delisted++;return;}
+        all.push(item);
+      });
+      onPage&&onPage(all.length);
+      if(list.length<100)break;
+      pn++;if(pn>80)break;
+      await sleep(2500+Math.random()*1000);
+    }
+    if(all.length>0){
+      $('sSource').textContent='push2';
+      await cacheStockCodes(all.map(s=>String(s.f12)));
+      if(skipped>0)log('   已过滤停牌/市值异常股 '+skipped+' 只');
+      if(delisted>0)log('   已过滤退市股 '+delisted+' 只（名称+黑名单）');
+      return all;
+    }
+  }catch(e){
+    /* ★激进切换：PUSH2_ALL_COOLING → 立即转腾讯兜底，保留已拉取部分数据待合并 */
+    if(e&&e.code==='PUSH2_ALL_COOLING'){
+      log('⚠ '+e.message+' → 立即切换腾讯兜底'+(all.length>0?'（保留已拉取 '+all.length+' 只合并）':''),true);
+    }else{
+      log('push2 行情拉取失败：'+e.message,true);
+    }
   }
-  if(skipped>0)log('   已过滤退市/停牌/市值异常股 '+skipped+' 只');
-  return all;
+
+  /* 代码列表保障（缓存→datacenter全量反查） */
+  let cachedCodes=await getCachedStockCodes();
+  if(!cachedCodes||cachedCodes.length<100){
+    log('无缓存代码列表，从 datacenter 资产负债表接口全量反查纯A股代码…');
+    cachedCodes=await fetchStockCodesFromDC();
+    if(cachedCodes.length>100){
+      await cacheStockCodes(cachedCodes);
+      log('   已缓存 '+cachedCodes.length+' 只纯A股代码');
+    }else{
+      log('   datacenter 反查失败（仅 '+cachedCodes.length+' 只）',true);
+    }
+  }
+
+  /* ★合并辅助：push2部分数据优先，兜底数据只补缺（与NCAV一致） */
+  const mergePartial=(fallbackData)=>{
+    if(all.length===0)return fallbackData;
+    const seen=new Set(all.map(s=>String(s.f12)));
+    const merged=[...all,...fallbackData.filter(s=>!seen.has(String(s.f12)))];
+    log('   合并结果: push2部分 '+all.length+' 只 + 兜底补缺 '+(merged.length-all.length)+' 只 = '+merged.length+' 只');
+    return merged;
+  };
+
+  /* 兜底1：腾讯（★成功后不再覆盖代码缓存，走mergePartial合并） */
+  if(cachedCodes&&cachedCodes.length>100){
+    log('尝试腾讯行情兜底（'+cachedCodes.length+' 只纯A股，分批50只/批，重试3次/批）…');
+    const tencentData=await fetchQuoteTencent(cachedCodes);
+    if(tencentData.length>100){
+      $('sSource').textContent=all.length>0?'腾讯兜底(合并)':'腾讯兜底';
+      log('   腾讯兜底完成，有效行情 '+tencentData.length+' 只（退市/停牌/B股已过滤）');
+      return mergePartial(tencentData);
+    }
+    log('腾讯兜底数据不足（'+tencentData.length+' 只），尝试新浪…',true);
+  }
+
+  /* 兜底2：新浪 */
+  if(cachedCodes&&cachedCodes.length>100){
+    const sinaData=await fetchQuoteSina(cachedCodes);
+    if(sinaData.length>100){
+      $('sSource').textContent=all.length>0?'新浪兜底(合并)':'新浪兜底';
+      log('   新浪兜底完成 '+sinaData.length+' 只（注意：新浪无总市值字段，相关股票将被市值过滤剔除）');
+      return mergePartial(sinaData);
+    }
+  }
+
+  /* 最终安全网 */
+  if(all.length>100){
+    $('sSource').textContent='push2(部分)';
+    log('兜底数据源均不可用，退回使用push2已拉取的部分数据 '+all.length+' 只',true);
+    return all;
+  }
+
+  throw new Error('所有行情数据源均不可用（push2+腾讯+新浪，或代码列表无法获取）');
 }
 
-/* ================= ② 现金流量表：按年报期批量（双接口互备） ================= */
+/* ================= 现金流量表 ================= */
 const CASH_REPORTS=['RPT_F10_FINANCE_GCASHFLOW','RPT_DMSK_FN_CASHFLOW'];
 async function fetchCashBatch(reportDate){
   for(const rn of CASH_REPORTS){
@@ -221,14 +770,13 @@ async function fetchCashBatch(reportDate){
   }
   return null;
 }
-/* 年报期：从去年往前共 n 个 12-31（多备2期容错，每股取最近10个有数据年份） */
 function annualDates(n){
   const arr=[];const y=new Date().getFullYear();
   for(let i=1;i<=n;i++)arr.push((y-i)+'-12-31');
   return arr;
 }
 
-/* ================= ③ 资产负债表：最新报告期批量（算负债率 + 有息负债/货币资金） ================= */
+/* ================= 资产负债表 ================= */
 async function fetchDebtBatch(reportDate){
   const out=[];let page=1;
   while(true){
@@ -268,15 +816,15 @@ function debtRatioOf(r){
   if(r.DEBT_ASSET_RATIO!=null&&r.DEBT_ASSET_RATIO!==''){
     const v=Number(r.DEBT_ASSET_RATIO);
     if(!isNaN(v)){
-      if(v>0&&v<=100)return v;        // 百分比口径
-      if(v>0&&v<=1)return v*100;      // 小数口径
+      if(v>0&&v<=100)return v;
+      if(v>0&&v<=1)return v*100;
     }
   }
   const ta=cleanNum(r.TOTAL_ASSETS),tl=cleanNum(r.TOTAL_LIABILITIES);
   return ta>0?(tl/ta*100):null;
 }
 
-/* ================= ④ 利润表：最近年报期批量（取利润总额、财务费用用于EBITDA，双接口互备，新增） ================= */
+/* ================= 利润表 ================= */
 const INCOME_REPORTS=['RPT_F10_FINANCE_GINCOME','RPT_DMSK_FN_INCOME'];
 async function fetchIncomeBatch(reportDate){
   for(const rn of INCOME_REPORTS){
@@ -307,113 +855,161 @@ async function fetchIncomeBatch(reportDate){
 /* ================= 主流程 ================= */
 const DEBT_MAX=60, RATIO_MIN=0, RATIO_MAX=7, YEARS=10, CAND_DATES=12;
 async function run(){
-  $('btnRefresh').disabled=true;setProg(0);
-  $('sCache').textContent='刷新中…';           /* 页面注明缓存时间（新增） */
+  $('btnRefresh').disabled=true;$('btnForce').disabled=true;setProg(0);
+  stats.dc=0;stats.push=0;stats.saved=0;stats.tencent=0;stats.sina=0;
+  $('sCache').textContent='刷新中…';
   log('开始刷新…');
   try{
-    /* ① 行情 */
-    log('① 分页拉取全市场A股行情…');
-    const spot=await fetchSpot(n=>setProg(Math.min(10,n/5700*10)));
+    log('① 分页拉取全市场A股行情（主源push2，全冷却>8s即切腾讯/新浪）…');
+    const spotRaw=await fetchSpot(n=>setProg(Math.min(10,n/5700*10)));
+    /* ★最终安全过滤（名称+黑名单+A股白名单，防御性兜底） */
+    const spot=spotRaw.filter(s=>!isDelistedName(s.f14)&&!isDelistedCode(s.f12)&&A_STOCK_RE.test(String(s.f12)));
+    if(spot.length<spotRaw.length)log('   最终安全过滤: 额外剔除退市/B股 '+(spotRaw.length-spot.length)+' 只');
     if(spot.length<1000)throw new Error('行情仅获取 '+spot.length+' 条，接口异常');
     const stocks=spot.map(s=>({code:s.f12,name:s.f14,mv:cleanNum(s.f20)}));
     $('sTotal').textContent=stocks.length;
     log('   有效A股共 '+stocks.length+' 只');setProg(10);
 
-    /* ② 负债率 + 有息负债科目：最近2个报告期批量 */
-    log('② 批量拉取资产负债表（最新报告期，含负债率/有息负债/货币资金）…');
-    const debtDates=recentReportDates(2);
-    const debtMap={};
-    for(let di=0;di<debtDates.length;di++){
-      const rows=await fetchDebtBatch(debtDates[di]);
-      log('   '+debtDates[di]+' 返回 '+rows.length+' 条');
-      rows.forEach(r=>{
-        const c=r.SECURITY_CODE;if(!c)return;
-        const rd=String(r.REPORT_DATE).slice(0,10);
-        const dr=debtRatioOf(r);
-        if(dr==null)return;
-        if(!debtMap[c]||rd>debtMap[c].rd)
-          debtMap[c]=Object.assign({rd:rd,ratio:dr},extractDebtFields(r));
-      });
-      setProg(10+10*(di+1)/debtDates.length);
-    }
-    $('sDebt').textContent=Object.keys(debtMap).length;
-
-    /* 字段自检（含新增有息负债科目） */
-    const sd=Object.keys(debtMap)[0];
-    if(sd){
-      const row=debtMap[sd];
-      const idb=(row.shortLoan||0)+(row.noncur1y||0)+(row.longLoan||0)+(row.bondPay||0);
-      log('负债率自检: '+sd+' = '+row.ratio.toFixed(2)+'% | 有息负债='+(idb/1e8).toFixed(2)+'亿, 货币资金='+((row.cash||0)/1e8).toFixed(2)+'亿');
-      if(row.ratio<=0||row.ratio>100)log('警告: 负债率数值异常，请检查字段',true);
-      if(idb===0&&(row.cash||0)===0)log('警告: 有息负债/货币资金科目均为0，字段名可能不匹配，数值将以0近似',true);
-    }
-
-    /* ③ 负债率缺失的单股兜底（同步提取有息负债科目） */
-    const missing=stocks.filter(s=>!debtMap[s.code]);
-    if(missing.length>0&&missing.length<=800){
-      log('③ '+missing.length+' 只股票批量负债率缺失，单股兜底…');
-      const tasks=missing.map(s=>async()=>{
-        try{const f=await fetchBalanceFull(codeOf(s.code));return f?{s:s,f:f}:null;}catch(e){return null;}
-      });
-      const filled=(await pool(tasks,6,(d,t)=>setProg(20+8*d/t))).filter(Boolean);
-      filled.forEach(x=>{
-        const dr=debtRatioOf(x.f);
-        if(dr!=null)debtMap[x.s.code]=Object.assign({rd:String(x.f.REPORT_DATE).slice(0,10),ratio:dr},extractDebtFields(x.f));
-      });
-      log('   兜底补齐 '+filled.length+' 只');
-    }else if(missing.length>800){log('③ 批量负债率缺失过多('+missing.length+')，跳过单股兜底',true);}
-    setProg(28);
-
-    /* ④ 现金流：候选年报期批量（允许个别期失败，扩展提取折旧摊销） */
+    /* ② 现金流量表（IndexedDB 缓存） */
     const dates=annualDates(CAND_DATES);
-    log('④ 批量拉取年报现金流量表，候选期: '+dates[0].slice(0,4)+' ~ '+dates[dates.length-1].slice(0,4)+' 共'+dates.length+'期');
+    const newestDate=dates[0];
+    const newestFinal=(new Date().getMonth()+1)>=5;
+    const incomeDates=annualDates(2);
+    log('② 批量拉取年报现金流量表，候选期: '+dates[dates.length-1].slice(0,4)+' ~ '+dates[0].slice(0,4)+' 共'+dates.length+'期（已披露完毕的历史期走缓存）…');
     const cashByCode={};let failedPeriods=0;
     await pool(dates.map(d=>async()=>{
-      const rows=await fetchCashBatch(d);
-      if(!rows){failedPeriods++;log('   ✗ '+d+' 整期失败(已重试)',true);return;}
-      log('   ✓ '+d+' 返回 '+rows.length+' 条');
-      rows.forEach(r=>{
-        const c=r.SECURITY_CODE;if(!c)return;
+      const key=CACHE_PRE+'cash_'+d;
+      const isFull=incomeDates.indexOf(d)>=0;
+      const c=await cacheGet(key);
+      if(c&&(d!==newestDate||newestFinal||Date.now()-c.ts<TTL_NEWEST)){
+        const rows=unpackCash(c.data,isFull);
+        for(const code in rows)(cashByCode[code]||(cashByCode[code]={}))[d.slice(0,4)]=rows[code];
+        const nHit=Object.keys(rows).length;
+        stats.saved+=Math.ceil(nHit/500);
+        log('   ✓ '+d+' 缓存命中（'+nHit+' 只，节省 ~'+Math.ceil(nHit/500)+' 次请求）');
+        return;
+      }
+      const raw=await fetchCashBatch(d);
+      if(!raw){failedPeriods++;log('   ✗ '+d+' 整期失败(已重试)',true);return;}
+      log('   ✓ '+d+' 返回 '+raw.length+' 条');
+      const pack={};
+      raw.forEach(r=>{
+        const cc=r.SECURITY_CODE;if(!cc)return;
         const y=String(r.REPORT_DATE).slice(0,4);
-        (cashByCode[c]||(cashByCode[c]={}))[y]={
+        const v={
           op:cleanNum(r.NETCASH_OPERATE),
           capex:cleanNum(r.CONSTRUCT_LONG_ASSET),
-          depr:pickNum(r,'DEPR_FIXED_ASSET','FIXED_ASSET_DEPR','FA_DEPR'),            /* 固定资产折旧（新增） */
-          amortInt:pickNum(r,'AMORT_INTANGIBLE_ASSET','INTANGIBLE_ASSET_AMORT'),      /* 无形资产摊销（新增） */
-          amortLong:pickNum(r,'AMORT_LONG_ASSET','LONG_TERM_ASSET_AMORT','AMORT_LONG_TERM_ASSET') /* 长期待摊摊销（新增） */
+          depr:pickNum(r,'DEPR_FIXED_ASSET','FIXED_ASSET_DEPR','FA_DEPR'),
+          amortInt:pickNum(r,'AMORT_INTANGIBLE_ASSET','INTANGIBLE_ASSET_AMORT'),
+          amortLong:pickNum(r,'AMORT_LONG_ASSET','LONG_TERM_ASSET_AMORT','AMORT_LONG_TERM_ASSET')
         };
+        (cashByCode[cc]||(cashByCode[cc]={}))[y]=v;
+        pack[cc]=v;
       });
-    }),3,(d,t)=>setProg(28+42*d/t));
+      if(Object.keys(pack).length>0)await cachePut(key,packCash(pack,isFull));
+    }),2,(d,t)=>setProg(10+42*d/t));
     if(CAND_DATES-failedPeriods<YEARS)throw new Error('年报期失败过多('+failedPeriods+'期)，无法凑齐'+YEARS+'年数据');
     $('sFcf').textContent=Object.keys(cashByCode).length;
 
-    /* 现金流字段自检（含折旧摊销） */
     const sc=Object.keys(cashByCode)[0];
     if(sc){
       const ys=Object.keys(cashByCode[sc]).sort();const y=ys[ys.length-1];const v=cashByCode[sc][y];
-      log('现金流自检: '+sc+' '+y+'年 经营净额='+(v.op/1e8).toFixed(2)+'亿, 购建支出='+(v.capex/1e8).toFixed(2)+'亿, 折旧='+(v.depr/1e8).toFixed(2)+'亿, 摊销='+((v.amortInt+v.amortLong)/1e8).toFixed(2)+'亿');
+      log('现金流自检: '+sc+' '+y+'年 经营净额='+(v.op/1e8).toFixed(2)+'亿, 购建支出='+(v.capex/1e8).toFixed(2)+'亿, 折旧='+((v.depr||0)/1e8).toFixed(2)+'亿, 摊销='+(((v.amortInt||0)+(v.amortLong||0))/1e8).toFixed(2)+'亿');
       if(v.op===0&&v.capex===0)log('警告: 现金流字段值全为0，字段名可能已变更，请对照东方财富网页核实',true);
     }
 
-    /* ⑤ 利润表：最近2个年报期批量，先占先得取最新有数据年报（新增） */
-    log('⑤ 批量拉取利润表（最近年报，用于EBITDA计算）…');
-    const incomeDates=annualDates(2);
+    /* ③ 资产负债表（IndexedDB 缓存） */
+    const balKey=CACHE_PRE+'bal';
+    const balCache=await cacheGet(balKey);
+    let debtMap=null;
+    if(balCache&&Date.now()-balCache.ts<TTL_BAL){
+      try{debtMap=unpackDebt(balCache.data);}catch(e){debtMap=null;}
+    }
+    if(debtMap){
+      stats.saved+=24;
+      log('③ 资产负债表缓存命中（'+fmtTime(balCache.ts)+' 生成，8h内有效），跳过批量与单股请求（约节省 24+ 次请求）');
+      setProg(70);
+    }else{
+      log('③ 批量拉取资产负债表（最新报告期，含负债率/有息负债/货币资金）…');
+      debtMap={};
+      const debtDates=recentReportDates(2);
+      for(let di=0;di<debtDates.length;di++){
+        const rows=await fetchDebtBatch(debtDates[di]);
+        log('   '+debtDates[di]+' 返回 '+rows.length+' 条');
+        rows.forEach(r=>{
+          const c=r.SECURITY_CODE;if(!c)return;
+          if(isDelistedName(r.SECURITY_NAME_ABBR)||isDelistedCode(c))return;   /* 退市公司不参与 */
+          const rd=String(r.REPORT_DATE).slice(0,10);
+          const dr=debtRatioOf(r);
+          if(dr==null)return;
+          if(!debtMap[c]||rd>debtMap[c].rd)
+            debtMap[c]=Object.assign({rd:rd,ratio:dr},extractDebtFields(r));
+        });
+        setProg(52+8*(di+1)/debtDates.length);
+      }
+      const sd=Object.keys(debtMap)[0];
+      if(sd){
+        const row=debtMap[sd];
+        const idb=(row.shortLoan||0)+(row.noncur1y||0)+(row.longLoan||0)+(row.bondPay||0);
+        log('负债率自检: '+sd+' = '+row.ratio.toFixed(2)+'% | 有息负债='+(idb/1e8).toFixed(2)+'亿, 货币资金='+((row.cash||0)/1e8).toFixed(2)+'亿');
+        if(row.ratio<=0||row.ratio>100)log('警告: 负债率数值异常，请检查字段',true);
+      }
+      const missing=stocks.filter(s=>!debtMap[s.code]);
+      const cashYearsOk=failedPeriods===0;
+      const skipYoung=cashYearsOk?missing.filter(s=>Object.keys(cashByCode[s.code]||{}).length<YEARS):[];
+      const needSingle=missing.filter(s=>skipYoung.indexOf(s)<0);
+      if(skipYoung.length>0){
+        stats.saved+=skipYoung.length;
+        log('   预过滤: '+skipYoung.length+' 只股票年报不足'+YEARS+'年（必然被剔除），跳过其单股兜底');
+      }
+      if(needSingle.length>0&&needSingle.length<=800){
+        log('   '+needSingle.length+' 只股票批量负债率缺失，单股兜底（并发2路）…');
+        const tasks=needSingle.map(s=>async()=>{
+          try{const f=await fetchBalanceFull(codeOf(s.code));return f?{s:s,f:f}:null;}catch(e){return null;}
+        });
+        const filled=(await pool(tasks,2,(d,t)=>setProg(64+6*d/t))).filter(Boolean);
+        filled.forEach(x=>{
+          const dr=debtRatioOf(x.f);
+          if(dr!=null)debtMap[x.s.code]=Object.assign({rd:String(x.f.REPORT_DATE).slice(0,10),ratio:dr},extractDebtFields(x.f));
+        });
+        log('   兜底补齐 '+filled.length+' 只');
+      }else if(needSingle.length>800){log('   批量负债率缺失过多('+needSingle.length+')，跳过单股兜底',true);}
+      await cachePut(balKey,packDebt(debtMap));
+    }
+    $('sDebt').textContent=Object.keys(debtMap).length;
+    setProg(70);
+
+    /* ④ 利润表（IndexedDB 缓存） */
+    log('④ 批量拉取利润表（最近年报，用于EBITDA计算；历史期走缓存）…');
     const incomeMap={};
     for(let di=0;di<incomeDates.length;di++){
-      const rows=await fetchIncomeBatch(incomeDates[di]);
-      log('   '+incomeDates[di]+' 返回 '+rows.length+' 条');
-      rows.forEach(r=>{
-        const c=r.SECURITY_CODE;if(!c)return;
-        if(!incomeMap[c])
-          incomeMap[c]={
-            year:incomeDates[di].slice(0,4),
-            profit:pickNum(r,'TOTAL_PROFIT','PROFIT_TOTAL'),          /* 利润总额 */
-            finExp:pickNum(r,'FINANCE_EXPENSE','FIN_EXP')             /* 财务费用 */
-          };
-      });
+      const d=incomeDates[di];const key=CACHE_PRE+'inc_'+d;
+      let slice=null;
+      const c=await cacheGet(key);
+      if(c&&(d!==incomeDates[0]||newestFinal||Date.now()-c.ts<TTL_NEWEST)){
+        slice=unpackIncome(c.data);
+        stats.saved+=Math.ceil(Object.keys(slice).length/500);
+        log('   '+d+' 利润表缓存命中（'+Object.keys(slice).length+' 只）');
+      }else{
+        const rows=await fetchIncomeBatch(d);
+        if(!rows){log('   '+d+' 利润表整期失败(对应股票EBITDA将显示—)',true);continue;}
+        log('   '+d+' 返回 '+rows.length+' 条');
+        slice={};
+        rows.forEach(r=>{
+          const cc=r.SECURITY_CODE;if(!cc)return;
+          if(isDelistedName(r.SECURITY_NAME_ABBR)||isDelistedCode(cc))return;   /* 退市公司不参与 */
+          slice[cc]=[pickNum(r,'TOTAL_PROFIT','PROFIT_TOTAL'),pickNum(r,'FINANCE_EXPENSE','FIN_EXP')];
+        });
+        if(Object.keys(slice).length>0)await cachePut(key,packIncome(slice));
+      }
+      const y=d.slice(0,4);
+      for(const cc in slice){
+        const a=slice[cc];
+        if(!Array.isArray(a)||a.length<2)continue;
+        if(!incomeMap[cc])incomeMap[cc]={year:y,profit:a[0],finExp:a[1]};
+      }
       setProg(70+15*(di+1)/incomeDates.length);
     }
-    /* EBITDA口径自检 */
     const si=Object.keys(incomeMap)[0];
     if(si){
       const inc=incomeMap[si];const cv=(cashByCode[si]||{})[inc.year];
@@ -421,31 +1017,30 @@ async function run(){
       if(inc.profit===0&&inc.finExp===0)log('警告: 利润表字段值全为0，字段名可能不匹配',true);
     }
 
-    /* ⑥ 计算与筛选（新增 有息负债 / EV / EBITDA / EV/EBITDA） */
-    log('⑥ 计算近10年平均自由现金流与估值指标并筛选…');
+    /* ⑤ 计算与筛选 */
+    log('⑤ 计算近10年平均自由现金流与估值指标并筛选…');
     const result=[];let noDebt=0,noYears=0,nonPos=0,outRange=0;
     const yearsUsed=new Set();
     stocks.forEach(s=>{
       const d=debtMap[s.code];
       if(!d){noDebt++;return;}
-      if(d.ratio>DEBT_MAX)return;                      // 资产负债率>60% 剔除
+      if(d.ratio>DEBT_MAX)return;
       const cm=cashByCode[s.code];if(!cm){noYears++;return;}
       const ys=Object.keys(cm).sort().reverse().slice(0,YEARS);
-      if(ys.length<YEARS){noYears++;return;}           // 近10年年报不齐 → 剔除
+      if(ys.length<YEARS){noYears++;return;}
       let sum=0;
       ys.forEach(y=>{const v=cm[y];sum+=(v.op-v.capex);yearsUsed.add(y);});
       const avg=sum/YEARS;
-      if(avg<=0){nonPos++;return;}                     // 平均FCF须>0
+      if(avg<=0){nonPos++;return;}
       const ratio=s.mv/avg;
       if(!(ratio>RATIO_MIN&&ratio<RATIO_MAX)){outRange++;return;}
 
-      /* ---- 新增：有息负债 / EV / EBITDA / EV/EBITDA ---- */
       const intDebt=(d.shortLoan||0)+(d.noncur1y||0)+(d.longLoan||0)+(d.bondPay||0);
       const ev=s.mv+intDebt-(d.cash||0);
       let ebitda=null,ebitdaY=null;
       const inc=incomeMap[s.code];
       if(inc){
-        const cv=cm[inc.year];   /* 折旧摊销与利润总额取同一年报，保证口径一致 */
+        const cv=cm[inc.year];
         const da=cv?((cv.depr||0)+(cv.amortInt||0)+(cv.amortLong||0)):0;
         ebitda=inc.profit+inc.finExp+da;
         ebitdaY=inc.year;
@@ -456,22 +1051,25 @@ async function run(){
         intDebt:yi(intDebt),ev:yi(ev),ebitda:yi(ebitda),ebitdaY:ebitdaY,evEbitda:evEbitda,
         debt:d.ratio,mv:yi(s.mv),avgFcf:yi(avg),ratio:ratio,span:ys[ys.length-1]+'–'+ys[0]});
     });
-    result.sort((a,b)=>a.ratio-b.ratio);               // 默认按估值比率升序
+    result.sort((a,b)=>a.ratio-b.ratio);
     $('sFinal').textContent=result.length;
     render(result);
     log('完成: 入选 '+result.length+' 只 | 剔除统计 → 负债率数据缺失:'+noDebt+' / 负债率>60%:'+(stocks.length-noDebt-noYears-nonPos-outRange-result.length)+' / 10年年报不齐:'+noYears+' / 平均FCF≤0:'+nonPos+' / 比率超出(0,7):'+outRange);
     log('年报区间: '+[...yearsUsed].sort().join(', ')+' | EV口径: 最新市值+最新报告期有息负债−货币资金 | EBITDA口径: 最近年报(利润总额+财务费用+折旧摊销)');
+    log('请求统计: 实际请求 '+(stats.push+stats.dc+stats.tencent+stats.sina)+' 次（行情 push2:'+stats.push+' + 腾讯:'+stats.tencent+' + 新浪:'+stats.sina+' + 报表:'+stats.dc+'），缓存约节省 '+stats.saved+' 次请求');
+    $('sReq').textContent=(stats.push+stats.dc+stats.tencent+stats.sina)+' / 省'+stats.saved;
+    $('sReq').title='实际请求次数（push2+腾讯+新浪+datacenter）/ 缓存节省次数(约)';
 
-    /* 缓存写入 + 页面注明缓存时间（新增） */
     const nowTs=Date.now();
-    safeStorage.setItem('fcf_cache_v2',JSON.stringify({ts:nowTs,data:result}));
+    await cachePut(CACHE_PRE+'result',result);
     $('sCache').textContent=fmtTime(nowTs);
     $('sCache').title='数据刷新完成时间（本地缓存）';
+    await reportStorage();
   }catch(e){
     log('刷新失败: '+e.message,true);
     $('sCache').textContent='刷新失败';
   }
-  $('btnRefresh').disabled=false;setProg(100);
+  $('btnRefresh').disabled=false;$('btnForce').disabled=false;setProg(100);
 }
 function setProg(p){$('pgBar').style.width=Math.min(100,p)+'%';}
 
@@ -497,7 +1095,7 @@ function render(rows){
     if(k==='debt'&&typeof v==='number'&&v>50)s='<span class="tag-warn">'+s+'</span>';
     let title='';
     if(k==='avgFcf')title='年报区间 '+r.span;
-    if(k==='intDebt')title='短期借款+一年内到期非流动负债+长期借款+应付债券（最新报告期 '+((r.debt!==undefined)?'':'')+'）';
+    if(k==='intDebt')title='短期借款+一年内到期非流动负债+长期借款+应付债券（最新报告期）';
     if(k==='ev')title='EV=总市值+有息负债−货币资金';
     if(k==='ebitda')title=(r.ebitdaY?('最近年报('+r.ebitdaY+')'):'最近年报')+'：利润总额+财务费用+折旧摊销';
     if(k==='evEbitda')title='EV ÷ EBITDA（EBITDA≤0 时无意义显示—）';
@@ -507,22 +1105,41 @@ function render(rows){
 
 /* ================= 启动 ================= */
 $('btnRefresh').addEventListener('click',run);
-(function init(){
-  renderHeader();                                  /* 表头始终先渲染 */
-  const c=safeStorage.getItem('fcf_cache_v2');
-  if(c){
-    try{
-      const o=JSON.parse(c);
-      render(o.data);
-      $('sFinal').textContent=o.data.length;
-      $('sCache').textContent=fmtTime(o.ts);       /* 页面注明缓存时间（新增） */
-      $('sCache').title='本地缓存生成时间';
-      log('已加载 '+fmtTime(o.ts)+' 的缓存数据（'+o.data.length+' 只），点击"刷新数据"获取最新');
-    }catch(e){log('缓存解析失败，请点击"刷新数据"重新拉取',true);}
+$('btnForce').addEventListener('click',async()=>{
+  if($('btnRefresh').disabled)return;
+  if(!confirm('将清空所有本地缓存（含历史年报数据与代码列表），重新全量拉取，约需 3~8 分钟。继续？'))return;
+  const n=await clearAllCache();
+  log('已清空 '+n+' 个缓存键，开始强制全量刷新');
+  run();
+});
+(async function init(){
+  renderHeader();
+  await probeIDB();
+  let o=null;
+  try{
+    const c=await cacheGet(CACHE_PRE+'result');
+    if(c)o={ts:c.ts,data:c.data};
+  }catch(e){}
+  if(o){
+    render(o.data);
+    $('sFinal').textContent=o.data.length;
+    $('sCache').textContent=fmtTime(o.ts);
+    $('sCache').title='本地缓存生成时间';
+    log('已加载 '+fmtTime(o.ts)+' 的缓存数据（'+o.data.length+' 只），点击"刷新数据"获取最新（历史年报走本地缓存，速度很快）');
   }else{
     log('未发现缓存。点击"刷新数据"按钮开始首次拉取。');
   }
+  await reportStorage();
 })();
 </script>
+<br><br><br>
+<div class="sub">
+  <b>★行情降级（激进切换版，与NCAV页面一致）：</b>push2 所有节点冷却且最早解禁还需 &gt;8秒 → <b>立即切换腾讯兜底</b>（自动合并 push2 已拉取的部分数据，push2条目优先）；冷却即将到期（≤8秒）则只等最早节点解禁继续用push2；兜底链：push2(6节点) → 腾讯(https,变量赋值,分批50只,重试3次/批) → 新浪(https+no-referrer,分批30只) → 退回push2部分数据；腾讯/新浪兜底成功后<b>不再用其结果覆盖代码列表缓存</b>（防退市码与不完整列表污染）。<br>
+  <b>★退市股与B股过滤：</b>①名称含「退」剔除（覆盖"退市XX"/"XX退"/退市整理期）；②已退市代码黑名单硬过滤（退市后名称保持*ST原样的，腾讯接口日期字段无效，靠黑名单拦截）；③纯A股代码白名单正则（剔除沪深B股200xxx/900xxx及新三板/老三板记录；原tencentPrefix的'9'前缀会把沪B当沪A发给腾讯——已修复）；④行情成交日期>15天无成交剔除；⑤代码列表缓存读取时清洗+反查全量分页按count终止（原20页截断漏字典序靠后记录）。ST/*ST正常交易的保留。<br>
+  <b>本地缓存（IndexedDB + 万元 + gzip）：</b>历史年报现金流/负债/利润缓存数据本身无污染，全部复用不重拉；最新报告期 8~12 小时自动刷新；数值按万元压缩，gzip后Uint8Array直存IndexedDB。<br>
+  <b>限速策略（方案A+B）：</b>datacenter全局间隔≥1.5~2.3秒；行情分页间隔≥2.5~3.5秒；并发2路；push2指数退避（800→1600→3200ms）；节点指数冷却（30s→1m→3m→5min→10m）。<br>
+  <b>腾讯/新浪局限：</b>北交所代码两者均不支持（前缀null被过滤，push2全冷却切兜底时北交所将缺失）；新浪无总市值字段。<br>
+  数据源：东方财富 push2 + datacenter 财务接口（JSONP） + 腾讯/新浪行情备用接口（GBK 变量赋值）
+</div>
 </body>
 </html>

@@ -19,7 +19,7 @@
   .progress>i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
   button{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 18px;font:inherit;font-size:12px;cursor:pointer}
   button:hover{filter:brightness(1.1)}button:disabled{background:#3a4656;cursor:not-allowed}
-  /* ===== 表格：colgroup 固定列宽 + 表头可折行 + 数据不换行 ===== */
+  .btn-sub{background:#475569}
   #tblWrap{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow-x:hidden;overflow-y:auto;max-height:70vh}
   table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:12px}
   thead th{position:sticky;top:0;background:#212b36;color:#9fb0c0;font-weight:500;text-align:right;padding:8px 4px;border-bottom:1px solid var(--line);white-space:normal;word-break:break-word;line-height:1.35;vertical-align:bottom;z-index:1}
@@ -30,7 +30,7 @@
   .num-null{color:#4a5568}
   .tag-low{color:var(--up)}
   .tag-b{color:#f59e0b}
-  .log{margin-top:10px;color:var(--dim);font-size:11px;line-height:1.7;max-height:130px;overflow:auto;word-break:break-all}
+  .log{margin-top:10px;color:var(--dim);font-size:11px;line-height:1.7;max-height:150px;overflow:auto;word-break:break-all}
   .err{color:#ef4444}
 </style>
 </head>
@@ -40,7 +40,7 @@
   口径：<br>
   ① NCAV = 流动资产合计 − 负债合计 − 少数股东权益 − 其他权益工具（含永续债/优先股）<br>
   ② 调整后NCAV = 现金类(货币资金+交易性金融资产)×100% + 应收类(应收账款+应收票据+其他应收款+应收款项融资)×80% + 存货×60% + 其他流动资产×50% + 固定资产类(固定资产+在建工程+投资性房地产)×15% − 负债合计(全额) − 少数股东权益 − 其他权益工具<br>
-  筛选条件（或关系，满足任一即入选）：0 &lt; 市值/NCAV &le; 1 或 0 &lt; 市值/调整后NCAV &le; 1；按 市值/NCAV 升序（无有效 市值/NCAV 的个股排在末尾）· 覆盖沪深A股+沪深B股（B股市值已按实时汇率换算人民币）· 已排除退市/停牌股 · 仅供研究
+  筛选条件（或关系）：0 &lt; 市值/NCAV &le; 1 或 0 &lt; 市值/调整后NCAV &le; 1；按 市值/NCAV 升序 · 覆盖沪深A股+沪深B股 · 仅供研究<br>
 </div>
 
 <div class="rate-box" id="rateBox">
@@ -52,35 +52,24 @@
 
 <div class="bar">
   <button id="btnRefresh">刷新数据</button>
+  <button id="btnForce" class="btn-sub">强制全量刷新</button>
   <span class="stat">A股总数<b id="sTotal">—</b></span>
   <span class="stat">B股总数<b id="sBTotal">—</b></span>
   <span class="stat">破净粗筛<b id="sCand">—</b></span>
   <span class="stat">批量覆盖<b id="sCover">—</b></span>
   <span class="stat">最终入选<b id="sFinal">—</b></span>
-  <span class="stat">下次自动刷新<b id="sNext">—</b></span>
+  <span class="stat">本次请求<b id="sReq">—</b></span>
+  <span class="stat">存储后端<b id="sStore">探测中…</b></span>
+  <span class="stat">行情源<b id="sSource">push2</b></span>
   <div class="progress"><i id="pgBar"></i></div>
 </div>
 
 <div id="tblWrap"><table>
 	<colgroup>
-		<col style="width:5.5%">
-		<col style="width:7%">
-		<col style="width:7.5%">
-		<col style="width:7.5%">
-		<col style="width:7.5%">
-		<col style="width:7.5%">
-		<col style="width:7%">
-		<col style="width:6.5%">
-		<col style="width:6.5%">
-		<col style="width:5.5%">
-		<col style="width:6.5%">
-		<col style="width:6%">
-		<col style="width:6.5%">
-		<col style="width:5.5%">
-		<col style="width:6.5%">
+		<col style="width:5.5%"><col style="width:7%"><col style="width:7.5%"><col style="width:7.5%"><col style="width:7.5%"><col style="width:7.5%"><col style="width:7%"><col style="width:6.5%"><col style="width:6.5%"><col style="width:5.5%"><col style="width:6.5%"><col style="width:6%"><col style="width:6.5%"><col style="width:5.5%"><col style="width:6.5%">
 	</colgroup>
   <thead id="thead"></thead>
-  <tbody id="tbody"><tr><td colspan="15" style="text-align:center;color:#4a5568;padding:24px">正在加载…（首次运行需拉取全市场数据，约 1–2 分钟）</td></tr></tbody>
+  <tbody id="tbody"><tr><td colspan="15" style="text-align:center;color:#4a5568;padding:24px">正在加载…（缓存前缀已升级，本次为全量重拉，约5-7分钟；之后恢复数十秒级）</td></tr></tbody>
 </table></div>
 <div class="log" id="log"></div>
 
@@ -90,193 +79,569 @@ const $=id=>document.getElementById(id);
 const log=(m,e)=>{const d=document.createElement('div');d.textContent='['+new Date().toLocaleTimeString()+'] '+m;if(e)d.className='err';$('log').appendChild(d);$('log').scrollTop=1e9;};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
-/* ================= 安全存储 ================= */
+/* ================= 配置 ================= */
+const CACHE_PRE='ncav7_';           /* ★前缀升级：旧缓存已被污染（黑名单误杀+截断代码列表），全量重建 */
+const TTL_DISC=12*3600*1000;
+const TTL_ONE=12*3600*1000;
+const TTL_CODES=7*24*3600*1000;
+const STALE_DAYS=15;
+const DC_MIN_GAP=1500;
+const DC_JITTER=800;
+const COOL_SWITCH_MS=8000;
+const W=1e4;
+const HAS_ZIP=(typeof CompressionStream!=='undefined')&&(typeof DecompressionStream!=='undefined');
+const stats={dc:0,push:0,saved:0,tencent:0,sina:0};
+let _storageWarned=false;
+
+log('gzip: '+(HAS_ZIP?'✓':'✗降级明文'));
+log('★本轮修复: 代码反查全量分页(不截断) + A/B白名单正则 + 腾讯批次重试/覆盖率 + 沪B币种自动判别');
+log('汇率: push2 → 腾讯wh → 新浪fx → 默认值');
+
+/* ★精简退市黑名单：仅保留用户实证的退市代码（旧2202码版误含在市股，已废弃） */
+const DELISTED_BLACKLIST=new Set(['002308','000416','301139']);
+log('退市黑名单: '+DELISTED_BLACKLIST.size+' 个（精简实证版，如发现新的退市股混入请把代码加进 DELISTED_BLACKLIST）');
+
+/* ★A股+B股代码白名单（剔除新三板/老三板/北交所记录） */
+const AB_CODE_RE=/^(?:00\d|30\d|60\d|688|689|200|900)\d{3}$/;
+
+/* ★沪B市值币种判别结果（fetchQuoteTencent内自动检测写入） */
+const TENCENT_MV_CURRENCY={sh900:'USD'};
+
+/* ================= IndexedDB 封装 ================= */
+const IDB_NAME='ncav_cache_db';
+const IDB_STORE='kv';
+let _db=null;
+async function openIDB(){
+  if(_db)return _db;
+  return new Promise((res,rej)=>{
+    const r=indexedDB.open(IDB_NAME,1);
+    r.onupgradeneeded=e=>{const db=e.target.result;if(!db.objectStoreNames.contains(IDB_STORE))db.createObjectStore(IDB_STORE);};
+    r.onsuccess=e=>{_db=e.target.result;res(_db);};
+    r.onerror=()=>rej(r.error);
+  });
+}
+function idbReq(req){return new Promise((res,rej)=>{req.onsuccess=()=>res(req.result);req.onerror=()=>rej(req.error);});}
+async function idbGet(key){const db=await openIDB();const tx=db.transaction(IDB_STORE,'readonly');return await idbReq(tx.objectStore(IDB_STORE).get(key));}
+async function idbPut(key,val){
+  const db=await openIDB();const tx=db.transaction(IDB_STORE,'readwrite');
+  tx.objectStore(IDB_STORE).put(val,key);
+  return new Promise((res,rej)=>{tx.oncomplete=()=>res(true);tx.onerror=()=>rej(tx.error);tx.onabort=()=>rej(tx.error||new Error('tx aborted'));});
+}
+async function idbRemove(key){
+  const db=await openIDB();const tx=db.transaction(IDB_STORE,'readwrite');
+  tx.objectStore(IDB_STORE).delete(key);
+  return new Promise((res,rej)=>{tx.oncomplete=()=>res(true);tx.onerror=()=>rej(tx.error);});
+}
+async function idbKeys(){const db=await openIDB();const tx=db.transaction(IDB_STORE,'readonly');return await idbReq(tx.objectStore(IDB_STORE).getAllKeys());}
+
+let USE_IDB=false;
+async function probeIDB(){
+  try{
+    await idbPut('__probe__','ok');
+    const v=await idbGet('__probe__');
+    await idbRemove('__probe__');
+    USE_IDB=(v==='ok');
+  }catch(e){USE_IDB=false;}
+  $('sStore').textContent=USE_IDB?'IndexedDB':'localStorage';
+  log('存储后端: '+(USE_IDB?'✓ IndexedDB':'✗ 降级 localStorage'));
+  return USE_IDB;
+}
+
+/* ================= 存储层 ================= */
 const memoryStorage={};
-const safeStorage={
+const lsStorage={
   getItem:k=>{try{return localStorage.getItem(k)}catch(e){return memoryStorage[k]||null}},
-  setItem:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){memoryStorage[k]=v}}
+  setItem:(k,v)=>{try{localStorage.setItem(k,v);return true}catch(e){memoryStorage[k]=v;return false}},
+  removeItem:k=>{try{localStorage.removeItem(k)}catch(e){}delete memoryStorage[k];},
+  keys:()=>{try{return Object.keys(localStorage)}catch(e){return Object.keys(memoryStorage)}}
 };
+async function storeGet(key){
+  if(USE_IDB){const v=await idbGet(key);if(v===undefined)return null;return v;}
+  return lsStorage.getItem(key);
+}
+async function storeSet(key,val){
+  if(USE_IDB)return await idbPut(key,val);
+  const s=(val instanceof Uint8Array)?'b64:'+btoa(String.fromCharCode.apply(null,val)):val;
+  return lsStorage.setItem(key,s);
+}
+async function storeRemove(key){
+  if(USE_IDB)return await idbRemove(key);
+  lsStorage.removeItem(key);return true;
+}
+async function storeKeys(){
+  if(USE_IDB)return await idbKeys();
+  return lsStorage.keys();
+}
 
 const cleanNum=v=>{
   if(v===null||v===undefined||v==='')return 0;
   if(typeof v==='number')return v;
   return parseFloat(String(v).replace(/,/g,''))||0;
 };
+const isBShare=code=>{const c=String(code);return c.startsWith('900')||c.startsWith('200');};
+const isDelistedName=name=>String(name||'').indexOf('退')>=0;
+const isDelistedCode=code=>DELISTED_BLACKLIST.has(String(code));
 
-const isBShare=code=>{
+/* ================= 汇率获取（push2→腾讯wh→新浪fx→默认） ================= */
+async function fetchExchangeRate(){
+  let usRate=0,hkRate=0,source='';
+  const defaultUs=7.20,defaultHk=0.92;
+  try{
+    const forexPath='/api/qt/clist/get?pn=1&pz=200&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f12&fs=m:119,m:120,m:133&fields=f2,f12,f14';
+    const r=await jsonpPush2(forexPath);
+    const list=(r&&r.data&&r.data.diff)||[];
+    const arr=Array.isArray(list)?list:Object.values(list);
+    for(const item of arr){
+      const code=item.f12,price=cleanNum(item.f2);
+      if(code==='USDCNH'&&price>5&&price<10)usRate=price;
+      if(code==='HKDCNH'&&price>0.5&&price<1.5)hkRate=price;
+      if(code==='USDCNYC'&&usRate===0&&price>5&&price<10)usRate=price;
+      if(code==='HKDCNYC'&&hkRate===0&&price>0.5&&price<1.5)hkRate=price;
+    }
+    if(usRate>0&&hkRate>0){source='push2';log('实时汇率获取成功: USD='+usRate.toFixed(4)+', HKD='+hkRate.toFixed(4)+'（push2）');}
+  }catch(e){
+    log('push2汇率失败('+((e&&e.code==='PUSH2_ALL_COOLING')?'全冷却':e.message)+')，尝试腾讯wh接口…',true);
+  }
+  if(usRate<=0||hkRate<=0){
+    try{
+      await loadVarScript('https://qt.gtimg.cn/q=whUSDCNY,whHKDCNY',{charset:'gbk',timeout:10000});
+      const u=window['v_whUSDCNY'],h=window['v_whHKDCNY'];
+      if(typeof u==='string'){const p=parseFloat(u.split('~')[3]);if(p>5&&p<10)usRate=p;}
+      if(typeof h==='string'){const p=parseFloat(h.split('~')[3]);if(p>0.5&&p<1.5)hkRate=p;}
+      try{delete window['v_whUSDCNY'];delete window['v_whHKDCNY'];}catch(e){}
+      if(usRate>0&&hkRate>0){source='腾讯wh';log('实时汇率获取成功: USD='+usRate.toFixed(4)+', HKD='+hkRate.toFixed(4)+'（腾讯wh）');}
+    }catch(e){log('腾讯汇率失败('+e.message+')，尝试新浪…',true);}
+  }
+  if(usRate<=0||hkRate<=0){
+    try{
+      await loadVarScript('https://hq.sinajs.cn/list=fx_susdcny,fx_shkdcny',{charset:'gbk',noReferrer:true,timeout:10000});
+      const u=window['hq_str_fx_susdcny'],h=window['hq_str_fx_shkdcny'];
+      if(typeof u==='string'){const p=parseFloat(u.split(',')[8]);if(p>5&&p<10)usRate=p;}
+      if(typeof h==='string'){const p=parseFloat(h.split(',')[8]);if(p>0.5&&p<1.5)hkRate=p;}
+      try{delete window['hq_str_fx_susdcny'];delete window['hq_str_fx_shkdcny'];}catch(e){}
+      if(usRate>0&&hkRate>0){source='新浪fx';log('实时汇率获取成功: USD='+usRate.toFixed(4)+', HKD='+hkRate.toFixed(4)+'（新浪fx）');}
+    }catch(e){log('新浪汇率失败('+e.message+')',true);}
+  }
+  let isDefault=false;
+  if(usRate<=0){usRate=defaultUs;isDefault=true;}
+  if(hkRate<=0){hkRate=defaultHk;isDefault=true;}
+  if(isDefault)log('所有实时汇率源失败，用默认值: USD='+defaultUs+', HKD='+defaultHk,true);
+  $('rateUsd').textContent=usRate.toFixed(4)+(source?'('+source+')':'')+(isDefault?'(默认)':'');
+  $('rateHkd').textContent=hkRate.toFixed(4)+(source?'('+source+')':'')+(isDefault?'(默认)':'');
+  $('rateTime').textContent='更新于 '+new Date().toLocaleTimeString('zh-CN');
+  return {usRate,hkRate};
+}
+
+/* ================= 行情拉取（JSONP + 变量赋值） ================= */
+function tencentPrefix(code){
   const c=String(code);
-  return c.startsWith('900')||c.startsWith('200');
-};
+  if(c.startsWith('6'))return 'sh'+c;
+  if(c.startsWith('900'))return 'sh'+c;
+  if(c.startsWith('8')||c.startsWith('4')||c.startsWith('92'))return null;
+  return 'sz'+c;
+}
 
-/* ================= 域名池 ================= */
+/* ================= push2 域名池（指数冷却） ================= */
 const PUSH2_HOSTS=[
-  {host:'29.push2.eastmoney.com', label:'29实时', fails:0, cooldownUntil:0},
-  {host:'79.push2.eastmoney.com', label:'79实时', fails:0, cooldownUntil:0},
-  {host:'91.push2.eastmoney.com', label:'91实时', fails:0, cooldownUntil:0},
-  {host:'push2delay.eastmoney.com', label:'延迟镜像', fails:0, cooldownUntil:0},
-  {host:'82.push2.eastmoney.com', label:'82备用', fails:0, cooldownUntil:0},
-  {host:'17.push2.eastmoney.com', label:'17备用', fails:0, cooldownUntil:0},
+  {host:'29.push2.eastmoney.com',label:'29实时',fails:0,cooldownUntil:0,cooldownLevel:0},
+  {host:'79.push2.eastmoney.com',label:'79实时',fails:0,cooldownUntil:0,cooldownLevel:0},
+  {host:'91.push2.eastmoney.com',label:'91实时',fails:0,cooldownUntil:0,cooldownLevel:0},
+  {host:'push2delay.eastmoney.com',label:'延迟镜像',fails:0,cooldownUntil:0,cooldownLevel:0},
+  {host:'82.push2.eastmoney.com',label:'82备用',fails:0,cooldownUntil:0,cooldownLevel:0},
+  {host:'17.push2.eastmoney.com',label:'17备用',fails:0,cooldownUntil:0,cooldownLevel:0},
 ];
-
 function getAvailableHost(){
   const now=Date.now();
-  for(const h of PUSH2_HOSTS){
-    if(now<h.cooldownUntil)continue;
-    return h;
-  }
+  for(const h of PUSH2_HOSTS){if(now<h.cooldownUntil)continue;return h;}
   PUSH2_HOSTS.sort((a,b)=>a.cooldownUntil-b.cooldownUntil);
   return PUSH2_HOSTS[0];
 }
-
 function markHost(h,success){
-  if(success){
-    h.fails=0;h.cooldownUntil=0;
-  }else{
+  if(success){h.fails=0;h.cooldownUntil=0;h.cooldownLevel=0;}
+  else{
     h.fails++;
     if(h.fails>=2){
-      h.cooldownUntil=Date.now()+30000;
+      h.cooldownLevel=Math.min((h.cooldownLevel||0)+1,5);
+      const cds=[30e3,60e3,180e3,300e3,600e3];
+      h.cooldownUntil=Date.now()+cds[h.cooldownLevel-1];
       h.fails=0;
-      log('节点 '+h.label+' 连续失败，冷却30秒');
+      log('节点 '+h.label+' 失败，冷却 '+(cds[h.cooldownLevel-1]/1000)+'s（等级'+h.cooldownLevel+'）');
     }
   }
 }
-
+async function checkGlobalCircuitBreaker(){
+  const now=Date.now();
+  if(PUSH2_HOSTS.every(h=>now<h.cooldownUntil)){
+    const minWait=Math.min(...PUSH2_HOSTS.map(h=>h.cooldownUntil-now));
+    if(minWait>COOL_SWITCH_MS){
+      const err=new Error('所有push2节点冷却中，最早解禁还需 '+Math.ceil(minWait/1000)+'s');
+      err.code='PUSH2_ALL_COOLING';
+      throw err;
+    }
+    await sleep(minWait+500);
+  }
+}
 let _cb=0;
-async function jsonpPush2(path){
-  for(let hostAttempt=0;hostAttempt<PUSH2_HOSTS.length*3;hostAttempt++){
-    const h=getAvailableHost();
-    const url='https://'+h.host+path;
-    try{
-      const result=await jsonpSingle(url,h.label);
-      markHost(h,true);
-      return result;
-    }catch(e){
-      markHost(h,false);
-      if(hostAttempt<PUSH2_HOSTS.length*3-1){
-        await sleep(800);
-      }
-    }
-  }
-  throw new Error('所有push2节点均不可用，请稍后重试');
-}
-
-function jsonpSingle(url,label){
+function jsonpSingle(url,label,cbParam){
   return new Promise((res,rej)=>{
     const name='__emcb_'+(++_cb)+'_'+Date.now();
     const s=document.createElement('script');
-    const timer=setTimeout(()=>{cleanup();rej(new Error(label+'超时'))},15000);
+    const timer=setTimeout(()=>{cleanup();rej(new Error(label+'超时'));},15000);
     function cleanup(){clearTimeout(timer);delete window[name];if(s.parentNode)s.parentNode.removeChild(s);}
     window[name]=d=>{cleanup();res(d);};
-    s.onerror=()=>{cleanup();rej(new Error(label+'网络失败'))};
-    s.src=url+(url.includes('?')?'&':'?')+'cb='+name;
+    s.onerror=()=>{cleanup();rej(new Error(label+'网络失败'));};
+    s.src=url+(url.includes('?')?'&':'?')+cbParam+'='+name;
     document.head.appendChild(s);
   });
 }
-
+function loadVarScript(url,{charset,noReferrer,timeout=15000}={}){
+  return new Promise((res,rej)=>{
+    const s=document.createElement('script');
+    if(charset)s.charset=charset;
+    if(noReferrer)s.referrerPolicy='no-referrer';
+    const timer=setTimeout(()=>{cleanup();rej(new Error('加载超时'));},timeout);
+    function cleanup(){clearTimeout(timer);if(s.parentNode)s.parentNode.removeChild(s);}
+    s.onload=()=>{cleanup();res(true);};
+    s.onerror=()=>{cleanup();rej(new Error('网络失败'));};
+    s.src=url;
+    document.head.appendChild(s);
+  });
+}
+async function jsonpPush2(path){
+  for(let hostAttempt=0;hostAttempt<PUSH2_HOSTS.length*3;hostAttempt++){
+    await checkGlobalCircuitBreaker();
+    const h=getAvailableHost();
+    try{
+      const result=await jsonpSingle('https://'+h.host+path,h.label,'cb');
+      markHost(h,true);stats.push++;
+      return result;
+    }catch(e){
+      markHost(h,false);
+      if(hostAttempt<PUSH2_HOSTS.length*3-1)await sleep(800*Math.pow(2,hostAttempt%3)+Math.random()*500);
+    }
+  }
+  throw new Error('所有push2节点均不可用');
+}
+let _dcChain=Promise.resolve();
+function dcGate(){
+  const p=_dcChain.then(()=>sleep(DC_MIN_GAP+Math.random()*DC_JITTER));
+  _dcChain=p.catch(()=>{});
+  return p;
+}
 async function jsonpDC(url,retries=3){
   for(let i=0;i<retries;i++){
     try{
-      return await jsonpSingleDC(url);
+      await dcGate();stats.dc++;
+      return await jsonpSingle(url,'DC','callback');
     }catch(e){
-      if(i<retries-1)await sleep(1000);
+      if(e&&e.code==='PUSH2_ALL_COOLING')throw e;
+      if(i<retries-1)await sleep(1800+Math.random()*1200);
     }
   }
   throw new Error('datacenter接口失败: '+url.slice(0,80)+'…');
 }
-
-function jsonpSingleDC(url){
-  return new Promise((res,rej)=>{
-    const name='__emcb_'+(++_cb)+'_'+Date.now();
-    const s=document.createElement('script');
-    const timer=setTimeout(()=>{cleanup();rej(new Error('DC超时'))},20000);
-    function cleanup(){clearTimeout(timer);delete window[name];if(s.parentNode)s.parentNode.removeChild(s);}
-    window[name]=d=>{cleanup();res(d);};
-    s.onerror=()=>{cleanup();rej(new Error('DC网络失败'))};
-    s.src=url+(url.includes('?')?'&':'?')+'callback='+name;
-    document.head.appendChild(s);
-  });
-}
-
 async function pool(tasks,limit,onOne){
   const ret=[];let i=0,done=0;
   const workers=Array(Math.min(limit,tasks.length)).fill(0).map(async()=>{
     while(i<tasks.length){const k=i++;
       try{ret[k]=await tasks[k]();}catch(e){ret[k]=null;}
-      done++;onOne&&onOne(done,tasks.length);}
+      done++;onOne&&onOne(done,tasks.length);
+      await sleep(200);}
   });
   await Promise.all(workers);return ret;
 }
-
 const yi=v=>v==null||isNaN(v)?null:(v/1e8);
 const codeOf=(code,mkt)=>{
   if(mkt===1)return code+'.SH';
   if(code.startsWith('8')||code.startsWith('4')||code.startsWith('92'))return code+'.BJ';
   return code+'.SZ';
 };
-
-/* ================= 汇率获取（使用外汇列表接口） ================= */
-async function fetchExchangeRate(){
-  let usRate=0;let hkRate=0;let isDefault=false;
-  let defaultUs=7.20;let defaultHk=0.92;
-  try{
-    const forexPath='/api/qt/clist/get?pn=1&pz=200&po=1&np=1'+
-      '&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f12'+
-      '&fs=m:119,m:120,m:133'+
-      '&fields=f2,f12,f14';
-    const r=await jsonpPush2(forexPath);
-    const list=(r&&r.data&&r.data.diff)||[];
-    const arr=Array.isArray(list)?list:Object.values(list);
-    for(const item of arr){
-      const code=item.f12;
-      const price=cleanNum(item.f2);
-      if(code==='USDCNH'&&price>5&&price<10){usRate=price;}
-      if(code==='HKDCNH'&&price>0.5&&price<1.5){hkRate=price;}
-      if(code==='USDCNYC'&&usRate===0&&price>5&&price<10){usRate=price;}
-      if(code==='HKDCNYC'&&hkRate===0&&price>0.5&&price<1.5){hkRate=price;}
-    }
-    if(usRate>0&&hkRate>0){
-      log('实时汇率获取成功: USD/CNY='+usRate.toFixed(4)+', HKD/CNY='+hkRate.toFixed(4));
-    }else{
-      log('部分汇率未找到，使用默认值补充',true);
-      if(usRate===0)usRate=defaultUs;
-      if(hkRate===0)hkRate=defaultHk;
-      isDefault=true;
-    }
-  }catch(e){
-    log('实时汇率获取失败('+e.message+')，使用默认值: USD='+defaultUs+', HKD='+defaultHk,true);
-    usRate=defaultUs;hkRate=defaultHk;isDefault=true;
-  }
-  $('rateUsd').textContent=usRate.toFixed(4)+(isDefault?'(默认)':'');
-  $('rateHkd').textContent=hkRate.toFixed(4)+(isDefault?'(默认)':'');
-  $('rateTime').textContent='更新于 '+new Date().toLocaleTimeString('zh-CN');
-  return {usRate,hkRate};
+function median(arr){
+  if(!arr.length)return null;
+  const a=[...arr].sort((x,y)=>x-y);
+  return a[Math.floor(a.length/2)];
 }
 
-/* ================= ① 行情：分页拉取（含退市股过滤） ================= */
+/* ================= 退市过滤 ================= */
+function isStaleDateStr(dateStr){
+  const raw=String(dateStr||'').replace(/[^0-9]/g,'');
+  if(raw.length>=8){
+    const ds=raw.slice(0,8);
+    const y=+ds.slice(0,4),m=+ds.slice(4,6),d=+ds.slice(6,8);
+    const t=new Date(y,m-1,d).getTime();
+    if(!isNaN(t)&&y>2000)return (Date.now()-t)>STALE_DAYS*86400000;
+  }
+  return null;
+}
+function isStaleQuoteTencent(f){
+  const r=isStaleDateStr(f[30]);
+  if(r!==null)return r;
+  return !(parseFloat(f[36])>0);
+}
+function isStaleQuoteSina(f){
+  const r=isStaleDateStr(f[30]);
+  if(r!==null)return r;
+  return !(parseFloat(f[8])>0);
+}
+
+/* ================= ★重写：代码反查（全量分页 + A/B白名单） ================= */
+async function fetchStockCodesFromDC(){
+  const d=recentReportDates(1)[0];
+  const codeSet=new Set();
+  let delistedFiltered=0,records=0,page=1,total=Infinity;
+  while(page<=40){                                    /* ★全量分页：按count终止，不再20页截断 */
+    const url='https://datacenter-web.eastmoney.com/api/data/v1/get?'+
+      'reportName=RPT_F10_FINANCE_GBALANCE&columns=SECURITY_CODE,SECURITY_NAME_ABBR'+
+      '&filter=(REPORT_DATE%3D%27'+d+'%27)'+
+      '&sortColumns=SECURITY_CODE&sortTypes=1&pageSize=500&pageNumber='+page;
+    let r=null;
+    try{r=await jsonpDC(url);}catch(e){break;}
+    const data=r&&r.result&&r.result.data;
+    if(!data||!data.length)break;
+    if(r.result.count)total=r.result.count;
+    records+=data.length;
+    data.forEach(x=>{
+      if(!x.SECURITY_CODE)return;
+      if(isDelistedName(x.SECURITY_NAME_ABBR)){delistedFiltered++;return;}
+      codeSet.add(String(x.SECURITY_CODE));
+    });
+    if(records>=total)break;
+    page++;
+  }
+  /* ★A/B白名单过滤：剔除新三板(43x/83x/87x)/老三板(400)/北交所(920)混入记录 */
+  const allCodes=[...codeSet];
+  const abCodes=allCodes.filter(c=>AB_CODE_RE.test(c));
+  const shB=abCodes.filter(c=>c.startsWith('900')).length;
+  const szB=abCodes.filter(c=>c.startsWith('200')).length;
+  log('   代码反查('+d+'): '+records+'/'+total+'条 → 唯一代码'+allCodes.length+
+      ' → 沪深A/B '+abCodes.length+' 只（沪B '+shB+'、深B '+szB+'；其余为新三板/老三板/北交所已剔除）');
+  if(delistedFiltered>0)log('   按名称剔除退市股 '+delistedFiltered+' 个');
+  if(shB===0)log('   ⚠ 未反查到沪B代码！请反馈',true);
+  return abCodes;
+}
+
+/* ================= ★重写：腾讯批量行情（重试+覆盖率+沪B币种判别） ================= */
+async function fetchQuoteTencent(codes){
+  const prefixed=codes.map(tencentPrefix).filter(Boolean);
+  if(!prefixed.length)return [];
+  const all=[];let staleCnt=0,blackCnt=0,failedBatches=0,consecFail=0;
+  const expected=prefixed.length;
+  for(let i=0;i<prefixed.length;i+=50){
+    const batch=prefixed.slice(i,i+50);
+    const url='https://qt.gtimg.cn/q='+batch.join(',');
+    /* ★每批重试3次，失败跳过续拉（原逻辑一批失败即整体返回，是覆盖率腰斩的原因之一） */
+    let loaded=false;
+    for(let attempt=0;attempt<3&&!loaded;attempt++){
+      try{
+        await loadVarScript(url,{charset:'gbk',timeout:12000});
+        loaded=true;
+        if(attempt>0)log('   腾讯批次第'+(attempt+1)+'次重试成功');
+      }catch(e){await sleep(2500+attempt*2000);}
+    }
+    if(!loaded){
+      failedBatches++;consecFail++;
+      log('   腾讯批次加载失败(跳过'+batch.length+'只,已重试3次)',true);
+      if(consecFail>=4){
+        log('   连续4批失败，疑似限流，终止腾讯拉取（已获取'+all.length+'只）',true);
+        break;
+      }
+      continue;
+    }
+    consecFail=0;
+    stats.tencent++;
+    for(const p of batch){
+      const v=window['v_'+p];
+      if(typeof v==='string'){
+        const f=v.split('~');
+        const rawCode=p.slice(2);
+        if(f.length>=32&&+f[3]>0){
+          if(isDelistedName(f[1])){}
+          else if(isDelistedCode(rawCode)){blackCnt++;}
+          else if(isStaleQuoteTencent(f)){staleCnt++;}
+          else{
+            const isSH=p.startsWith('sh');
+            /* ★市值兜底：[45]总市值 → [44]流通市值（B股≈全流通） */
+            let mvYi=0;
+            if(f.length>45&&parseFloat(f[45]))mvYi=parseFloat(f[45]);
+            else if(f.length>44&&parseFloat(f[44]))mvYi=parseFloat(f[44]);
+            all.push({
+              f12:rawCode,f13:isSH?1:0,f14:f[1],
+              f2:parseFloat(f[3])||0,
+              f20:mvYi?mvYi*1e8:null,
+              f23:f.length>46?(parseFloat(f[46])||0):null,
+              src:'tencent'
+            });
+          }
+        }
+      }
+      try{delete window['v_'+p];}catch(e){}
+    }
+    await sleep(700+Math.random()*400);
+  }
+  /* ★覆盖率统计 */
+  const pct=expected?(all.length/expected*100).toFixed(1):'0';
+  log('   腾讯行情覆盖: '+all.length+'/'+expected+'（'+pct+'%）'+(failedBatches>0?'，失败批次'+failedBatches:''));
+  if(expected&&all.length<expected*0.85)log('   ⚠ 腾讯覆盖率<85%，部分股票缺失',true);
+  if(blackCnt>0)log('   剔除黑名单退市股 '+blackCnt+' 只');
+  if(staleCnt>0)log('   剔除成交日期陈旧(>'+STALE_DAYS+'天)股票 '+staleCnt+' 只');
+  /* ★沪B市值币种自动判别：隐含股数(=市值/价格)中位数 沪B/深B 对比
+     美元口径→比值≈1；人民币口径→比值≈USD汇率(≈6.7)。以3为界 */
+  const shImp=[],szImp=[];
+  for(const s of all){
+    if(s.f20>0&&s.f2>0){
+      if(String(s.f12).startsWith('900'))shImp.push(s.f20/s.f2);
+      else if(String(s.f12).startsWith('200'))szImp.push(s.f20/s.f2);
+    }
+  }
+  if(shImp.length>=5&&szImp.length>=5){
+    const ratio=median(shImp)/median(szImp);
+    TENCENT_MV_CURRENCY.sh900=ratio>3?'CNY':'USD';
+    log('   沪B市值币种判别: 隐含股数中位数比 沪B/深B='+ratio.toFixed(2)+
+        ' → '+(TENCENT_MV_CURRENCY.sh900==='CNY'?'人民币口径(不换算)':'美元口径(×USD汇率)'));
+  }else{
+    log('   沪B市值币种: 样本不足(沪B'+shImp.length+'/深B'+szImp.length+')，默认按美元口径(×USD汇率)');
+  }
+  return all;
+}
+
+/* 新浪兜底（最后手段，无市值与PB字段） */
+async function fetchQuoteSina(codes){
+  const prefixed=codes.map(tencentPrefix).filter(Boolean);
+  if(!prefixed.length)return [];
+  const all=[];let blackCnt=0;
+  for(let i=0;i<prefixed.length;i+=30){
+    const batch=prefixed.slice(i,i+30);
+    const url='https://hq.sinajs.cn/list='+batch.join(',');
+    try{
+      await loadVarScript(url,{charset:'gbk',noReferrer:true});
+      stats.sina++;
+      for(const p of batch){
+        const v=window['hq_str_'+p];
+        if(typeof v==='string'){
+          const f=v.split(',');
+          const rawCode=p.slice(2);
+          if(f.length>=32&&+f[3]>0&&!isDelistedName(f[0])&&!isDelistedCode(rawCode)&&!isStaleQuoteSina(f)){
+            all.push({f12:rawCode,f13:p.startsWith('sh')?1:0,f14:f[0],f2:parseFloat(f[3])||0,f20:null,f23:null,src:'sina'});
+          }
+        }
+        try{delete window['hq_str_'+p];}catch(e){}
+      }
+    }catch(e){
+      log('   新浪批次加载失败: '+e.message,true);
+      return all.length>30?all:[];
+    }
+    await sleep(1000+Math.random()*500);
+  }
+  if(blackCnt>0)log('   新浪剔除黑名单退市股 '+blackCnt+' 只');
+  return all;
+}
+
+/* ================= 代码列表缓存 ================= */
+async function getCachedStockCodes(){
+  try{
+    const c=await cacheGet(CACHE_PRE+'stock_codes');
+    if(!c||!Array.isArray(c.data))return null;
+    if(Date.now()-c.ts>TTL_CODES){log('代码列表缓存过期，将重新反查');return null;}
+    return c.data;
+  }catch(e){return null;}
+}
+async function cacheStockCodes(codes){
+  await cachePut(CACHE_PRE+'stock_codes',codes.filter(c=>!isDelistedCode(c)));
+}
+
+/* ================= ① 行情降级链 ================= */
 async function fetchSpot(onPage){
   const mkPath=(pn,pz)=>'/api/qt/clist/get?pn='+pn+'&pz='+pz+'&po=1&np=1'+
     '&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f12'+
     '&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048,m:0+t:7,m:1+t:3'+
     '&fields=f2,f12,f13,f14,f20,f23';
   const ext=r=>{const raw=(r&&r.data&&r.data.diff)||[];return Array.isArray(raw)?raw:Object.values(raw);};
-  const all=[];let pn=1;let skipped=0;
-  while(true){
-    const r=await jsonpPush2(mkPath(pn,100));
-    const list=ext(r);
-    if(!list.length)break;
-    list.forEach(item=>{
-      const price=item.f2;
-      if(price===null||price===undefined||price==='-'||cleanNum(price)===0){skipped++;return;}
-      all.push(item);
-    });
-    onPage&&onPage(all.length);
-    if(list.length<100)break;
-    pn++;
-    if(pn>80)break;
-    await sleep(300);
+  const all=[];let pn=1,skipped=0,delisted=0;
+  try{
+    while(true){
+      const r=await jsonpPush2(mkPath(pn,100));
+      const list=ext(r);
+      if(!list.length)break;
+      list.forEach(item=>{
+        const price=item.f2;
+        if(price===null||price===undefined||price==='-'||cleanNum(price)===0){skipped++;return;}
+        if(isDelistedName(item.f14)||isDelistedCode(item.f12)){delisted++;return;}
+        item.src='push2';
+        all.push(item);
+      });
+      onPage&&onPage(all.length);
+      if(list.length<100)break;
+      pn++;
+      if(pn>80)break;
+      await sleep(2500+Math.random()*1000);
+    }
+    if(all.length>0){
+      $('sSource').textContent='push2';
+      await cacheStockCodes(all.map(s=>String(s.f12)));
+      if(skipped>0)log('   过滤停牌/无价格股 '+skipped+' 只');
+      if(delisted>0)log('   过滤退市股 '+delisted+' 只');
+      return all;
+    }
+  }catch(e){
+    if(e&&e.code==='PUSH2_ALL_COOLING')log('⚠ '+e.message+' → 立即切换腾讯兜底'+(all.length>0?'（保留已拉取'+all.length+'只合并）':''),true);
+    else log('push2行情拉取失败：'+e.message,true);
   }
-  if(skipped>0)log('   已过滤退市/停牌股 '+skipped+' 只');
-  return all;
+
+  /* 代码列表（缓存 → ★全量反查） */
+  let cachedCodes=await getCachedStockCodes();
+  if(cachedCodes&&cachedCodes.length>100){
+    const before=cachedCodes.length;
+    cachedCodes=cachedCodes.filter(c=>!isDelistedCode(c)&&AB_CODE_RE.test(c));
+    if(cachedCodes.length<before)log('   缓存代码列表清洗: 剔除 '+(before-cachedCodes.length)+' 个');
+  }
+  if(!cachedCodes||cachedCodes.length<100){
+    log('无缓存代码列表，从 datacenter 资产负债表接口全量反查A/B股代码（约27页×500条，不截断）…');
+    cachedCodes=await fetchStockCodesFromDC();
+    if(cachedCodes.length>100){
+      cachedCodes=cachedCodes.filter(c=>!isDelistedCode(c));
+      await cacheStockCodes(cachedCodes);
+      log('   已缓存 '+cachedCodes.length+' 只A/B股代码（7天有效）');
+    }else{
+      log('   datacenter 反查失败（仅 '+cachedCodes.length+' 只）',true);
+    }
+  }
+
+  const mergePartial=(fallbackData)=>{
+    if(all.length===0)return fallbackData;
+    const seen=new Set(all.map(s=>String(s.f12)));
+    const merged=[...all,...fallbackData.filter(s=>!seen.has(String(s.f12)))];
+    log('   合并结果: push2部分 '+all.length+' 只 + 兜底补缺 '+(merged.length-all.length)+' 只 = '+merged.length+' 只');
+    return merged;
+  };
+
+  /* 兜底1：腾讯 */
+  if(cachedCodes&&cachedCodes.length>100){
+    log('尝试腾讯行情兜底（'+cachedCodes.length+' 只A/B股，分批50只，含沪B/深B）…');
+    const tencentData=await fetchQuoteTencent(cachedCodes);
+    if(tencentData.length>100){
+      $('sSource').textContent=all.length>0?'腾讯兜底(合并)':'腾讯兜底';
+      log('   腾讯兜底完成，有效行情 '+tencentData.length+' 只');
+      return mergePartial(tencentData);
+    }
+    log('腾讯兜底数据不足（'+tencentData.length+' 只），尝试新浪…',true);
+  }
+
+  /* 兜底2：新浪 */
+  if(cachedCodes&&cachedCodes.length>100){
+    const sinaData=await fetchQuoteSina(cachedCodes);
+    if(sinaData.length>100){
+      $('sSource').textContent=all.length>0?'新浪兜底(合并)':'新浪兜底';
+      log('   新浪兜底完成 '+sinaData.length+' 只（无市值与PB字段，A股破净粗筛失效，仅B股可入选）');
+      return mergePartial(sinaData);
+    }
+  }
+
+  if(all.length>100){
+    $('sSource').textContent='push2(部分)';
+    log('兜底数据源均不可用，退回push2已拉取的部分数据 '+all.length+' 只',true);
+    return all;
+  }
+  throw new Error('所有行情数据源均不可用');
 }
 
 /* ================= ② F10 资产负债表 ================= */
@@ -297,7 +662,6 @@ async function fetchF10Batch(reportDate){
   }
   return out;
 }
-
 async function fetchBalanceFull(secuCode){
   const url='https://datacenter-web.eastmoney.com/api/data/v1/get?'+
     'reportName=RPT_F10_FINANCE_GBALANCE&columns=ALL'+
@@ -315,7 +679,6 @@ async function fetchBalanceFull(secuCode){
   });
   return best||d[0];
 }
-
 function recentReportDates(n){
   const arr=[];const now=new Date();const y=now.getFullYear();
   const qs=[[y,12,31],[y,9,30],[y,6,30],[y,3,31],[y-1,12,31],[y-1,9,30],[y-1,6,30],[y-1,3,31]];
@@ -325,56 +688,193 @@ function recentReportDates(n){
   }
   return arr;
 }
+function disclosureDeadline(reportDate){
+  const y=parseInt(reportDate.slice(0,4),10);
+  const m=parseInt(reportDate.slice(5,7),10);
+  if(m===3)return new Date(y,3,30).getTime();
+  if(m===6)return new Date(y,7,31).getTime();
+  if(m===9)return new Date(y,9,31).getTime();
+  return new Date(y+1,3,30).getTime();
+}
+function periodCacheValid(c,reportDate){
+  if(!c)return false;
+  const now=Date.now();
+  const dl=disclosureDeadline(reportDate);
+  if(now<dl)return (now-c.ts)<TTL_DISC;
+  return c.ts>=dl;
+}
 
-/* ================= NCAV 统一计算（含调整后NCAV） ================= */
-function calcRow(code,name,mv,f,rd,isB,currency){
-  /* ===== 原始 NCAV ===== */
-  const ca=cleanNum(f.TOTAL_CURRENT_ASSETS);
-  const liab=cleanNum(f.TOTAL_LIABILITIES);
-  const mi=cleanNum(f.MINORITY_EQUITY);
-  const oei=cleanNum(f.OTHER_EQUITY_TOOL||f.OTHER_EQUITY_INSTRUMENT||0);
+/* ================= 字段解析 + 万元压缩 ================= */
+const BAL_KEYS=['ca','liab','mi','oei','cash','tradeFA','ar','nr','otr','fr','inv','oca',
+                'fixed','cip','invReal','shortLoan','noncur1y','longLoan','bondPay','leaseLiab','ta'];
+const orNum=(r,...keys)=>{for(const k of keys){const v=r[k];if(v)return cleanNum(v);}return 0;};
+function resolveBalance(r){
+  return {
+    ca:cleanNum(r.TOTAL_CURRENT_ASSETS),liab:cleanNum(r.TOTAL_LIABILITIES),
+    mi:cleanNum(r.MINORITY_EQUITY),oei:orNum(r,'OTHER_EQUITY_TOOL','OTHER_EQUITY_INSTRUMENT'),
+    cash:cleanNum(r.MONETARYFUNDS),tradeFA:orNum(r,'TRADE_FINASSET_NOTFVTPL','TRADE_FIN_ASSETS'),
+    ar:cleanNum(r.ACCOUNTS_RECE),nr:cleanNum(r.NOTE_RECE),
+    otr:cleanNum(r.TOTAL_OTHER_RECE),fr:cleanNum(r.FINANCE_RECE),
+    inv:cleanNum(r.INVENTORY),oca:orNum(r,'OTHER_CURRENT_ASSETS','OTHER_CURRENT_ASSET'),
+    fixed:cleanNum(r.FIXED_ASSET),cip:cleanNum(r.CIP),invReal:cleanNum(r.INVEST_REALESTATE),
+    shortLoan:cleanNum(r.SHORT_LOAN),noncur1y:orNum(r,'NONCURRENT_LIAB_1YEAR','NON_CURRENT_LIAB_1YEAR','LIAB_1YEAR'),
+    longLoan:cleanNum(r.LONG_LOAN),bondPay:cleanNum(r.BOND_PAYABLE),
+    leaseLiab:orNum(r,'LEASE_LIABILITY','LEASE_LIAB','RENT_LEASE'),
+    ta:cleanNum(r.TOTAL_ASSETS)
+  };
+}
+function packBal(map){
+  const o={};
+  for(const c in map){const f=map[c];o[c]=BAL_KEYS.map(k=>Math.round((f[k]||0)/W)).join(',');}
+  return o;
+}
+function unpackBal(o){
+  const m={};
+  for(const c in o){
+    const a=String(o[c]).split(',').map(x=>+x||0);
+    const f={};
+    for(let i=0;i<BAL_KEYS.length;i++)f[BAL_KEYS[i]]=(a[i]||0)*W;
+    m[c]=f;
+  }
+  return m;
+}
+function mergePack(balMap,pack,d){
+  for(const code in pack){
+    const f=pack[code];
+    const ex=balMap[code];
+    if(!ex||d>ex.rd||(d===ex.rd&&(f.ta||0)>(ex.f.ta||0)))balMap[code]={rd:d,f:f};
+  }
+}
+async function purgeStaleCaches(dates){
+  const keep={};dates.forEach(d=>keep[CACHE_PRE+'bal_'+d]=1);
+  let purged=0;
+  const keys=await storeKeys();
+  for(const k of keys){
+    if(k.indexOf(CACHE_PRE+'bal_')===0&&!keep[k]){await storeRemove(k);purged++;}
+    else if(k.indexOf(CACHE_PRE+'one_')===0){
+      const c=await cacheGet(k);
+      if(!c||Date.now()-c.ts>14*24*3600*1000){await storeRemove(k);purged++;}
+    }
+  }
+  if(purged>0)log('   已清理 '+purged+' 个过期缓存键');
+}
+
+/* ================= 缓存读写（gzip） ================= */
+async function zipToU8(s){
+  if(!HAS_ZIP)return null;
+  try{
+    const u8=new TextEncoder().encode(s);
+    const z=new Blob([u8]).stream().pipeThrough(new CompressionStream('gzip'));
+    return new Uint8Array(await new Response(z).arrayBuffer());
+  }catch(e){return null;}
+}
+async function unzipFromU8(a){
+  if(!HAS_ZIP||!(a instanceof Uint8Array))return null;
+  try{
+    const z=new Blob([a]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(z).text();
+  }catch(e){return null;}
+}
+async function u8ToB64(a){
+  let bin='';const CH=0x8000;
+  for(let i=0;i<a.length;i+=CH)bin+=String.fromCharCode.apply(null,a.subarray(i,i+CH));
+  return btoa(bin);
+}
+async function b64ToU8(b64){return Uint8Array.from(atob(b64),c=>c.charCodeAt(0));}
+async function cacheGet(key){
+  try{
+    const raw=await storeGet(key);
+    if(raw===null||raw===undefined)return null;
+    let s=null;
+    if(USE_IDB){
+      if(raw instanceof Uint8Array)s=await unzipFromU8(raw);
+      else if(typeof raw==='string')s=raw;
+    }else{
+      if(typeof raw==='string'&&raw.indexOf('b64:')===0)s=await unzipFromU8(await b64ToU8(raw.slice(4)));
+      else if(typeof raw==='string')s=raw;
+    }
+    if(!s)return null;
+    const o=JSON.parse(s);
+    return (o&&o.data!==undefined)?o:null;
+  }catch(e){return null;}
+}
+async function cachePut(key,data){
+  const payload=JSON.stringify({ts:Date.now(),data:data});
+  try{
+    if(USE_IDB){
+      const z=await zipToU8(payload);
+      if(z)return await storeSet(key,z);
+      return await storeSet(key,payload);
+    }else{
+      const z=await zipToU8(payload);
+      if(z)return storeSet(key,'b64:'+await u8ToB64(z));
+      return storeSet(key,payload);
+    }
+  }catch(e){
+    if(USE_IDB){
+      log('IndexedDB写入失败，降级localStorage: '+e.message,true);
+      USE_IDB=false;$('sStore').textContent='localStorage(降级)';
+      return cachePut(key,data);
+    }
+    if(!_storageWarned){_storageWarned=true;log('警告: 存储空间不足，缓存仅保存在内存中',true);}
+    memoryStorage[key]=payload;
+    return false;
+  }
+}
+async function clearAllCache(){
+  let n=0;
+  const ks=(await storeKeys()).filter(k=>k.indexOf('ncav')===0||k==='ncav_cache_v2');
+  for(const k of ks){await storeRemove(k);n++;}
+  return n;
+}
+async function reportStorage(){
+  try{
+    let total=0;const by={};
+    if(USE_IDB){
+      const ks=await idbKeys();
+      for(const k of ks){
+        const v=await idbGet(k);
+        let b=0;
+        if(v instanceof Uint8Array)b=v.byteLength;
+        else if(typeof v==='string')b=v.length*2;
+        total+=b+(k.length*2);
+        const p=String(k).replace(/[\d\-]+.*$/,'')||k;
+        by[p]=(by[p]||0)+b;
+      }
+    }else{
+      for(const k of lsStorage.keys()){
+        const v=(()=>{try{return localStorage.getItem(k)||''}catch(e){return memoryStorage[k]||''}})();
+        const b=(v.length+k.length)*2;
+        total+=b;
+        const p=k.replace(/[\d\-]+.*$/,'')||k;
+        by[p]=(by[p]||0)+b;
+      }
+    }
+    const mb=n=>(n/1048576).toFixed(2)+'MB';
+    log('存储占用: 合计 '+mb(total)+'（'+(USE_IDB?'IndexedDB':'localStorage')+'）');
+    Object.keys(by).sort((a,b)=>by[b]-by[a]).slice(0,8).forEach(k=>log('   '+k+': '+mb(by[k])));
+  }catch(e){}
+}
+
+/* ================= NCAV 计算 ================= */
+function calcRow(code,name,mv,rd,f,isB,currency){
+  const ca=f.ca,liab=f.liab,mi=f.mi,oei=f.oei;
   const ncav=ca-liab-mi-oei;
-
-  /* ===== 调整后 NCAV ===== */
-  const cash=cleanNum(f.MONETARYFUNDS);
-  const tradeFA=cleanNum(f.TRADE_FINASSET_NOTFVTPL||f.TRADE_FIN_ASSETS||0);
-  const ar=cleanNum(f.ACCOUNTS_RECE);
-  const nr=cleanNum(f.NOTE_RECE);
-  const otr=cleanNum(f.TOTAL_OTHER_RECE);
-  const fr=cleanNum(f.FINANCE_RECE);
-  const inv=cleanNum(f.INVENTORY);
-  const oca=cleanNum(f.OTHER_CURRENT_ASSETS||f.OTHER_CURRENT_ASSET||0);
-  const fixed=cleanNum(f.FIXED_ASSET);
-  const cip=cleanNum(f.CIP);
-  const invReal=cleanNum(f.INVEST_REALESTATE);
-
   const adjNcavRaw=
-    (cash+tradeFA)*1.00
-    +(ar+nr+otr+fr)*0.80
-    +inv*0.60
-    +oca*0.50
-    +(fixed+cip+invReal)*0.15
+    (f.cash+f.tradeFA)*1.00
+    +(f.ar+f.nr+f.otr+f.fr)*0.80
+    +f.inv*0.60
+    +f.oca*0.50
+    +(f.fixed+f.cip+f.invReal)*0.15
     -liab-mi-oei;
-
-  /* ===== 筛选（或关系）：0<市值/NCAV≤1 或 0<市值/调整后NCAV≤1，满足任一即入选 ===== */
   const passNcav=(ncav>0&&mv<=ncav);
-  const passAdj =(adjNcavRaw>0&&mv<=adjNcavRaw);
+  const passAdj=(adjNcavRaw>0&&mv<=adjNcavRaw);
   if(!passNcav&&!passAdj)return null;
-
-  /* ===== 有息负债 ===== */
-  const ib=cleanNum(f.SHORT_LOAN)
-    +cleanNum(f.NONCURRENT_LIAB_1YEAR||f.NON_CURRENT_LIAB_1YEAR||f.LIAB_1YEAR||0)
-    +cleanNum(f.LONG_LOAN)+cleanNum(f.BOND_PAYABLE)
-    +cleanNum(f.LEASE_LIABILITY||f.LEASE_LIAB||f.RENT_LEASE||0);
-
-  const ta=cleanNum(f.TOTAL_ASSETS);
-  let marketLabel='A股';
-  if(isB){marketLabel='B股('+currency+')';}
-
+  const ib=f.shortLoan+f.noncur1y+f.longLoan+f.bondPay+f.leaseLiab;
+  const ta=f.ta;
   return {code:code,name:name,rd:rd,
-    market:marketLabel,
-    ca:yi(ca),liab:yi(liab),
-    ncav:yi(ncav),adjNcav:yi(adjNcavRaw),
+    market:isB?('B股('+currency+')'):'A股',
+    ca:yi(ca),liab:yi(liab),ncav:yi(ncav),adjNcav:yi(adjNcavRaw),
     ib:yi(ib),mi:yi(mi),oei:yi(oei),
     ratio:ta>0?(liab/ta*100):null,mv:yi(mv),
     ratioNcav:ncav>0?(mv/ncav):null,
@@ -383,23 +883,44 @@ function calcRow(code,name,mv,f,rd,isB,currency){
 
 /* ================= 主流程 ================= */
 async function run(){
-  $('btnRefresh').disabled=true;$('tbody').innerHTML='';setProg(0);
+  $('btnRefresh').disabled=true;$('btnForce').disabled=true;
+  $('tbody').innerHTML='';setProg(0);
+  stats.dc=0;stats.push=0;stats.saved=0;stats.tencent=0;stats.sina=0;
+  TENCENT_MV_CURRENCY.sh900='USD';
   log('开始刷新…');
   try{
-    log('① 分页拉取全市场行情与实时汇率…');
-    const [spot,rates]=await Promise.all([fetchSpot(n=>setProg(Math.min(10,n/5700*10))), fetchExchangeRate()]);
+    log('① 拉取全市场行情与实时汇率（push2 → 腾讯 → 新浪）…');
+    const [spotRaw,rates]=await Promise.all([fetchSpot(n=>setProg(Math.min(10,n/5800*10))),fetchExchangeRate()]);
     const {usRate,hkRate}=rates;
+
+    const spot=spotRaw.filter(s=>!isDelistedName(s.f14)&&!isDelistedCode(s.f12));
+    if(spot.length<spotRaw.length)log('   最终过滤: 额外剔除退市股 '+(spotRaw.length-spot.length)+' 只');
     if(spot.length<1000)throw new Error('行情仅获取 '+spot.length+' 条，接口异常');
     $('sTotal').textContent=spot.length;
 
-    const candA=[];const candB=[];const spotMap={};let bCount=0;let invalidMv=0;
+    const candA=[],candB=[],spotMap={};
+    let bCount=0,invalidMv=0;
     spot.forEach(s=>{
-      const code=s.f12;const pb=cleanNum(s.f23);let mv=cleanNum(s.f20);const isB=isBShare(code);let currency='CNY';
+      const code=s.f12,pb=cleanNum(s.f23);
+      let mv=cleanNum(s.f20);
+      const isB=isBShare(code);
+      let currency='CNY';
       if(mv<=0){invalidMv++;return;}
       if(isB){
         bCount++;
-        if(code.startsWith('200')){mv=mv*hkRate;currency='HKD';}
-        else if(code.startsWith('900')){mv=mv*usRate;currency='USD';}
+        if(code.startsWith('200'))currency='HKD';
+        else if(code.startsWith('900'))currency='USD';
+        /* ★B股市值换算：按数据来源+市场
+           push2: f20已是人民币口径，直接用
+           腾讯: 深B=港币×HKD汇率（实证）；沪B=按自动判别结果（USD→×汇率 / CNY→直接用）
+           新浪: 无市值字段（到不了这里） */
+        if(s.src==='tencent'){
+          if(code.startsWith('900')){
+            if(TENCENT_MV_CURRENCY.sh900==='USD')mv=mv*usRate;
+          }else{
+            mv=mv*hkRate;
+          }
+        }
         spotMap[code]={code:s.f12,mkt:s.f13,name:s.f14,mv:mv,pb:pb,isB:true,currency:currency};
         candB.push(spotMap[code]);
       }else{
@@ -407,58 +928,102 @@ async function run(){
         if(pb>0&&pb<1&&mv>0)candA.push(spotMap[code]);
       }
     });
-    if(invalidMv>0)log('   额外过滤市值异常(≤0)股票 '+invalidMv+' 只');
+    if(invalidMv>0)log('   过滤市值异常(≤0)股票 '+invalidMv+' 只');
     $('sBTotal').textContent=bCount;
-    log('   有效行情共 '+spot.length+' 条 (A股 '+(spot.length-bCount)+', B股 '+bCount+')');
+    log('   有效行情共 '+spot.length+' 条 (A股 '+(spot.length-bCount)+', B股 '+bCount+
+        '【沪B '+spot.filter(s=>String(s.f12).startsWith('900')).length+'、深B '+spot.filter(s=>String(s.f12).startsWith('200')).length+'】)');
     const cand=[...candA,...candB];
     $('sCand').textContent=cand.length;
     log('② 粗筛候选: A股破净 '+candA.length+' 只, B股全量 '+candB.length+' 只');
     setProg(15);
 
+    /* ③ 资产负债表 */
     const dates=recentReportDates(3);
-    log('③ 批量拉取 F10 资产负债表，报告期: '+dates.join(' / '));
+    await purgeStaleCaches(dates);
+    log('③ 加载资产负债表，报告期: '+dates.join(' / ')+'…');
     const balMap={};
     for(let di=0;di<dates.length;di++){
-      const rows=await fetchF10Batch(dates[di]);
-      log('   '+dates[di]+' 批量返回 '+rows.length+' 条');
-      rows.forEach(r=>{
-        const c=r.SECURITY_CODE;if(!c)return;
-        const rd=String(r.REPORT_DATE).slice(0,10);
-        if(!balMap[c]){balMap[c]={rd:rd,row:r};}
-        else if(rd>balMap[c].rd){balMap[c]={rd:rd,row:r};}
-        else if(rd===balMap[c].rd){
-          if(cleanNum(r.TOTAL_ASSETS)>cleanNum(balMap[c].row.TOTAL_ASSETS))balMap[c]={rd:rd,row:r};
+      const d=dates[di];
+      const key=CACHE_PRE+'bal_'+d;
+      const c=await cacheGet(key);
+      if(periodCacheValid(c,d)){
+        const pack=unpackBal(c.data);
+        mergePack(balMap,pack,d);
+        const n=Object.keys(pack).length;
+        stats.saved+=Math.ceil(n/500);
+        log('   ✓ '+d+' 缓存命中（'+n+' 只，节省 ~'+Math.ceil(n/500)+' 次请求）');
+      }else{
+        let rows=null;
+        try{rows=await fetchF10Batch(d);}catch(e){log('   '+d+' 批量拉取失败: '+e.message,true);}
+        if(rows&&rows.length){
+          log('   '+d+' 批量返回 '+rows.length+' 条');
+          const pack={};
+          rows.forEach(r=>{
+            const code=r.SECURITY_CODE;if(!code)return;
+            if(isDelistedName(r.SECURITY_NAME_ABBR)||isDelistedCode(code))return;
+            const f=resolveBalance(r);
+            if(!pack[code]||(f.ta||0)>(pack[code].ta||0))pack[code]=f;
+          });
+          mergePack(balMap,pack,d);
+          await cachePut(key,packBal(pack));
+        }else if(c){
+          log('   '+d+' 拉取失败，降级使用旧缓存',true);
+          mergePack(balMap,unpackBal(c.data),d);
+        }else{
+          log('   ✗ '+d+' 无数据且无缓存，跳过该期',true);
         }
-      });
+      }
       setProg(15+40*(di+1)/dates.length);
     }
     $('sCover').textContent=Object.keys(balMap).length;
 
+    /* ④ 单股兜底 */
     const missingCands=[];cand.forEach(c=>{if(!balMap[c.code])missingCands.push(c);});
     if(missingCands.length>0){
-      log('④ 发现 '+missingCands.length+' 只候选股批量数据缺失，启动单股兜底…');
+      log('④ '+missingCands.length+' 只候选股批量数据缺失，单股兜底（并发2路，12h缓存）…');
       const tasks=missingCands.map(c=>async()=>{
-        try{const full=await fetchBalanceFull(codeOf(c.code,c.mkt));return full?{c:c,full:full}:null;}catch(e){return null;}
+        const key=CACHE_PRE+'one_'+c.code;
+        const cch=await cacheGet(key);
+        if(cch&&Date.now()-cch.ts<TTL_ONE){
+          stats.saved++;
+          if(cch.data.empty)return null;
+          const a=String(cch.data.f).split(',').map(x=>+x||0);
+          const f={};
+          for(let i=0;i<BAL_KEYS.length;i++)f[BAL_KEYS[i]]=(a[i]||0)*W;
+          return {c:c,rd:cch.data.rd,f:f};
+        }
+        const full=await fetchBalanceFull(codeOf(c.code,c.mkt));
+        if(!full){await cachePut(key,{empty:true});return null;}
+        const rd=String(full.REPORT_DATE).slice(0,10);
+        const f=resolveBalance(full);
+        await cachePut(key,{rd:rd,f:BAL_KEYS.map(k=>Math.round((f[k]||0)/W)).join(',')});
+        return {c:c,rd:rd,f:f};
       });
-      const filled=(await pool(tasks,6,(d,t)=>setProg(55+20*d/t))).filter(Boolean);
-      filled.forEach(x=>{balMap[x.c.code]={rd:String(x.full.REPORT_DATE).slice(0,10),row:x.full};});
+      const filled=(await pool(tasks,2,(d,t)=>setProg(55+20*d/t))).filter(Boolean);
+      filled.forEach(x=>{balMap[x.c.code]={rd:x.rd,f:x.f};});
       log('   单股兜底补齐 '+filled.length+' 只');
     }
     setProg(78);
 
+    /* ⑤ 计算与筛选 */
     const result=[];cand.forEach(c=>{
       const b=balMap[c.code];if(!b)return;
-      const row=calcRow(c.code,c.name,c.mv,b.row,b.rd,c.isB,c.currency);
+      const row=calcRow(c.code,c.name,c.mv,b.rd,b.f,c.isB,c.currency);
       if(row)result.push(row);
     });
 
-    const pab=balMap['000001'];
-    if(pab)log('单位自检: 平安银行总资产原始值 = '+pab.row.TOTAL_ASSETS+'（正常应约5e12量级）');
-    if(pab)log('字段自检: 平安银行货币资金 = '+pab.row.MONETARYFUNDS);
-    if(pab)log('字段自检: 平安银行应收账款 = '+pab.row.ACCOUNTS_RECE);
-    if(pab)log('字段自检: 平安银行存货 = '+pab.row.INVENTORY);
+    /* ★沪B链路自检（下次运行直接核验） */
+    ['900901','900905'].forEach(bc=>{
+      const q=spotMap[bc];
+      if(q){
+        log('   沪B自检: '+bc+'('+q.name+') 市值='+(q.mv/1e8).toFixed(2)+'亿CNY ['+
+            (q.src?((TENCENT_MV_CURRENCY.sh900==='USD'&&q.src==='tencent')?'USD口径×汇率':(q.src==='tencent'?'CNY口径':'push2人民币')):'?')+
+            ']，报表期 '+(balMap[bc]?balMap[bc].rd:'无'));
+      }else{
+        log('   沪B自检: '+bc+' 未获行情（代码列表或腾讯覆盖缺失，请反馈）',true);
+      }
+    });
 
-    /* 排序保持：按 市值/NCAV 升序；无有效该比值的个股（NCAV≤0，仅凭调整后NCAV入选）排在末尾 */
     result.sort((a,b)=>{
       const ra=(a.ratioNcav==null||isNaN(a.ratioNcav))?Infinity:a.ratioNcav;
       const rb=(b.ratioNcav==null||isNaN(b.ratioNcav))?Infinity:b.ratioNcav;
@@ -466,18 +1031,21 @@ async function run(){
     });
     $('sFinal').textContent=result.length;
     render(result);
-    log('完成，入选 '+result.length+' 只（满足 市值/NCAV≤1 或 市值/调整后NCAV≤1 任一条件；含A股与换算后B股，已排除退市股）。');
-    safeStorage.setItem('ncav_cache_v2',JSON.stringify({ts:Date.now(),data:result,rates:{us:usRate,hk:hkRate}}));
+    log('完成，入选 '+result.length+' 只。');
+    log('请求统计: '+(stats.push+stats.dc+stats.tencent+stats.sina)+' 次（push2:'+stats.push+' 腾讯:'+stats.tencent+' 新浪:'+stats.sina+' 报表:'+stats.dc+'），缓存节省 '+stats.saved+' 次');
+    $('sReq').textContent=(stats.push+stats.dc+stats.tencent+stats.sina)+' / 省'+stats.saved;
+    await cachePut(CACHE_PRE+'result',result);
+    await reportStorage();
   }catch(e){
     log('刷新失败: '+e.message,true);
   }
-  $('btnRefresh').disabled=false;setProg(100);scheduleNext();
+  $('btnRefresh').disabled=false;$('btnForce').disabled=false;setProg(100);
 }
 function setProg(p){$('pgBar').style.width=Math.min(100,p)+'%';}
 
 /* ================= 渲染 ================= */
 function render(rows){
-const cols=[['代码','code'],['市场','market'],['名称','name'],['报告期','rd'],
+  const cols=[['代码','code'],['市场','market'],['名称','name'],['报告期','rd'],
     ['流动资产合计(亿)','ca'],['负债合计(亿)','liab'],
     ['有息负债(亿)','ib'],['少数股东权益(亿)','mi'],['其他权益工具(亿)','oei'],
     ['资产负债率(%)','ratio'],['总市值(亿,CNY)','mv'],
@@ -499,43 +1067,39 @@ const cols=[['代码','code'],['市场','market'],['名称','name'],['报告期'
     :'<tr><td colspan="15" style="text-align:center;color:#4a5568;padding:24px">当前无满足 市值/NCAV≤1 或 市值/调整后NCAV≤1 的股票</td></tr>';
 }
 
-/* ================= 定时 ================= */
-let _timer=null;
-function scheduleNext(){
-  clearTimeout(_timer);
-  const now=new Date(),t=new Date(now);
-  t.setHours(18,0,0,0);
-  if(t<=now)t.setDate(t.getDate()+1);
-  $('sNext').textContent=t.toLocaleString('zh-CN');
-  _timer=setTimeout(run,t-now);
-  log('已调度下次自动刷新: '+t.toLocaleString('zh-CN'));
-}
-setInterval(()=>{
-  if(!document.hidden){
-    const n=new Date(),t=new Date();t.setHours(18,0,0,0);
-    if(Math.abs(t-n)<60000&&!$('btnRefresh').disabled){log('18:00 触发自动刷新');run();}
-  }
-},60000);
-
 /* ================= 启动 ================= */
 $('btnRefresh').onclick=run;
-(function init(){
-  const c=safeStorage.getItem('ncav_cache_v2');
-  if(c){
-    try{
-      const o=JSON.parse(c);
-      render(o.data);
-      if(o.rates){
-        $('rateUsd').textContent=o.rates.us.toFixed(4)+'(缓存)';
-        $('rateHkd').textContent=o.rates.hk.toFixed(4)+'(缓存)';
-        $('rateTime').textContent='缓存于 '+new Date(o.ts).toLocaleTimeString('zh-CN');
-      }
-      log('已加载 '+new Date(o.ts).toLocaleString('zh-CN')+' 的缓存，点击刷新获取最新');
-    }catch(e){}
+$('btnForce').onclick=async()=>{
+  if($('btnRefresh').disabled)return;
+  if(!confirm('将清空所有本地缓存，重新全量拉取。继续？'))return;
+  const n=await clearAllCache();
+  log('已清空 '+n+' 个缓存键，开始强制全量刷新');
+  run();
+};
+(async function init(){
+  await probeIDB();
+  let o=null;
+  try{
+    const c=await cacheGet(CACHE_PRE+'result');
+    if(c)o={ts:c.ts,data:c.data};
+  }catch(e){}
+  if(o){
+    render(o.data);
+    $('sFinal').textContent=o.data.length;
+    log('已加载 '+new Date(o.ts).toLocaleString('zh-CN')+' 的缓存，点击"刷新数据"获取最新');
   }
-  scheduleNext();
-  if(!c)run();
+  if(!o)run();
+  await reportStorage();
 })();
 </script>
+
+<br><br><br>
+<div class="sub">
+  <b>★本轮修复——沪B缺失根因：</b>代码列表反查原截断在20页（1万条/共13259条），沪B代码900xxx按字典序排在全部8xxxxx新三板代码之后、位于截断区外；深B(200xxx)排在第1-2页故完好。现改为<b>全量分页反查+A/B代码白名单正则</b>（剔除新三板/老三板/北交所），日志输出「沪B N、深B N」计数供核验。<br>
+  <b>B股市值口径：</b>腾讯深B总市值=港币×HKD汇率（已实证）；<b>沪B币种自动判别</b>（隐含股数=市值÷价格的中位数 沪B/深B 对比，比值≈1为美元口径×USD汇率、≈6.7为人民币口径直接用），判别依据输出到日志；市值字段[45]缺失时用[44]流通市值兜底（B股≈全流通）；push2的f20对B股已是人民币口径直接用。<br>
+  <b>腾讯拉取加固：</b>每批重试3次、单批失败跳过续拉（连续4批全败才终止）、间隔0.7-1.1秒、结束输出覆盖率；<b>退市黑名单精简为实证代码</b>（旧版2202码误含茅台600519等在市股，已废弃；如再发现退市股混入，将其代码加入DELISTED_BLACKLIST即可）。<br>
+  <b>实时汇率：</b>push2 → 腾讯whUSDCNY/whHKDCNY → 新浪fx → 默认值；<b>退市过滤：</b>名称含「退」+黑名单+成交日期陈旧15天；<b>缓存：</b>IndexedDB+gzip+万元精度，已披露报告期永久缓存、代码列表7天、单股兜底12h；缓存前缀已升级（旧缓存被污染，首次全量重拉）。<br>
+  <b>限速：</b>DC间隔1.5-2.3秒；并发2路；push2指数退避+节点指数冷却；push2全冷却解禁&gt;8秒立即切腾讯。
+</div>
 </body>
 </html>
