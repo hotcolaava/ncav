@@ -886,7 +886,6 @@ async function run(){
   $('btnRefresh').disabled=true;$('btnForce').disabled=true;
   $('tbody').innerHTML='';setProg(0);
   stats.dc=0;stats.push=0;stats.saved=0;stats.tencent=0;stats.sina=0;
-  TENCENT_MV_CURRENCY.sh900='USD';
   log('开始刷新…');
   try{
     log('① 拉取全市场行情与实时汇率（push2 → 腾讯 → 新浪）…');
@@ -906,24 +905,19 @@ async function run(){
       const isB=isBShare(code);
       let currency='CNY';
       if(mv<=0){invalidMv++;return;}
-      if(isB){
-        bCount++;
-        if(code.startsWith('200'))currency='HKD';
-        else if(code.startsWith('900'))currency='USD';
-        /* ★B股市值换算：按数据来源+市场
-           push2: f20已是人民币口径，直接用
-           腾讯: 深B=港币×HKD汇率（实证）；沪B=按自动判别结果（USD→×汇率 / CNY→直接用）
-           新浪: 无市值字段（到不了这里） */
-        if(s.src==='tencent'){
-          if(code.startsWith('900')){
-            if(TENCENT_MV_CURRENCY.sh900==='USD')mv=mv*usRate;
-          }else{
-            mv=mv*hkRate;
-          }
-        }
-        spotMap[code]={code:s.f12,mkt:s.f13,name:s.f14,mv:mv,pb:pb,isB:true,currency:currency};
-        candB.push(spotMap[code]);
-      }else{
+	if(isB){
+	  bCount++;
+	  if(code.startsWith('200')){
+		currency='HKD';
+		mv=mv*hkRate;      /* ★深B一律×HKD汇率（腾讯/push2均为港币口径） */
+	  }else if(code.startsWith('900')){
+		currency='USD';
+		mv=mv*usRate;      /* ★沪B一律×USD汇率（腾讯/push2均为美元口径） */
+	  }
+	  spotMap[code]={code:s.f12,mkt:s.f13,name:s.f14,mv:mv,pb:pb,
+					 isB:true,currency:currency,src:s.src};  /* ★补存src供自检 */
+	  candB.push(spotMap[code]);
+	}else{
         spotMap[code]={code:s.f12,mkt:s.f13,name:s.f14,mv:mv,pb:pb,isB:false,currency:'CNY'};
         if(pb>0&&pb<1&&mv>0)candA.push(spotMap[code]);
       }
@@ -1013,16 +1007,13 @@ async function run(){
     });
 
     /* ★沪B链路自检（下次运行直接核验） */
-    ['900901','900905'].forEach(bc=>{
-      const q=spotMap[bc];
-      if(q){
-        log('   沪B自检: '+bc+'('+q.name+') 市值='+(q.mv/1e8).toFixed(2)+'亿CNY ['+
-            (q.src?((TENCENT_MV_CURRENCY.sh900==='USD'&&q.src==='tencent')?'USD口径×汇率':(q.src==='tencent'?'CNY口径':'push2人民币')):'?')+
-            ']，报表期 '+(balMap[bc]?balMap[bc].rd:'无'));
-      }else{
-        log('   沪B自检: '+bc+' 未获行情（代码列表或腾讯覆盖缺失，请反馈）',true);
-      }
-    });
+	['900901','900905'].forEach(bc=>{
+	  const q=spotMap[bc];
+	  if(q){
+		log('   沪B自检: '+bc+'('+q.name+') 市值='+(q.mv/1e8).toFixed(2)+'亿CNY ['+
+			(q.src||'?')+']，报表期 '+(balMap[bc]?balMap[bc].rd:'无'));
+	  }
+	});
 
     result.sort((a,b)=>{
       const ra=(a.ratioNcav==null||isNaN(a.ratioNcav))?Infinity:a.ratioNcav;
